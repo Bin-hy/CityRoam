@@ -203,3 +203,28 @@ func (s *Store) SetPlanVersionStatus(ctx context.Context, id, status string) err
 func (s *Store) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }
+
+func (s *Store) GetRunByRequestID(ctx context.Context, requestID string) (Run, error) {
+	return s.q.GetRunByRequestID(ctx, &requestID)
+}
+
+// AcceptPlanVersion accepts one version and supersedes previously accepted
+// versions of the same trip in a single transaction.
+func (s *Store) AcceptPlanVersion(ctx context.Context, runID string, seq int32) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("store: begin accept version: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.q.WithTx(tx)
+	if err := q.AcceptPlanVersionBySeq(ctx, AcceptPlanVersionBySeqParams{ID: runID, Seq: seq}); err != nil {
+		return fmt.Errorf("store: accept version: %w", err)
+	}
+	if err := q.SupersedeOtherVersions(ctx, SupersedeOtherVersionsParams{ID: runID, Seq: seq}); err != nil {
+		return fmt.Errorf("store: supersede versions: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: commit accept version: %w", err)
+	}
+	return nil
+}

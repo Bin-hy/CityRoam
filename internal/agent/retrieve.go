@@ -18,6 +18,12 @@ type CandidateSource interface {
 	SearchCandidates(ctx context.Context, query domain.POIQuery) ([]domain.POI, error)
 }
 
+// POILookup resolves a full POI by ID so adjustments can keep untouched days
+// identical to the base version.
+type POILookup interface {
+	Get(id string) (domain.POI, bool)
+}
+
 type RetrieveInput struct {
 	RunID       string
 	Constraints domain.ConstraintSet
@@ -35,6 +41,10 @@ func WithSnapshotSource(source CandidateSource) NodeOption {
 
 func WithExternalSource(source CandidateSource) NodeOption {
 	return func(n *Nodes) { n.external = source }
+}
+
+func WithPOILookup(lookup POILookup) NodeOption {
+	return func(n *Nodes) { n.lookup = lookup }
 }
 
 func WithCandidateLimit(limit int) NodeOption {

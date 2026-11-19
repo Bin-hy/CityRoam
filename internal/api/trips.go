@@ -27,6 +27,10 @@ type TripStore interface {
 	SoftDeleteTrip(ctx context.Context, id string) error
 	ListRunsByTrip(ctx context.Context, tripID string) ([]repo.Run, error)
 	ListPlanVersions(ctx context.Context, tripID string) ([]repo.PlanVersion, error)
+	GetPlanVersionBySeq(ctx context.Context, tripID string, seq int32) (repo.PlanVersion, error)
+	GetRunByRequestID(ctx context.Context, requestID string) (repo.Run, error)
+	CreateRun(ctx context.Context, arg repo.CreateRunParams) (repo.Run, error)
+	SaveRunState(ctx context.Context, arg repo.UpdateRunStateParams) error
 }
 
 // RunStarter is implemented by agent.Runner.

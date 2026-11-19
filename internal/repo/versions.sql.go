@@ -10,6 +10,21 @@ import (
 	"encoding/json"
 )
 
+const acceptPlanVersionBySeq = `-- name: AcceptPlanVersionBySeq :exec
+UPDATE plan_versions SET status = 'accepted'
+WHERE trip_id = (SELECT trip_id FROM runs WHERE runs.id = $1) AND seq = $2
+`
+
+type AcceptPlanVersionBySeqParams struct {
+	ID  string `json:"id"`
+	Seq int32  `json:"seq"`
+}
+
+func (q *Queries) AcceptPlanVersionBySeq(ctx context.Context, arg AcceptPlanVersionBySeqParams) error {
+	_, err := q.db.Exec(ctx, acceptPlanVersionBySeq, arg.ID, arg.Seq)
+	return err
+}
+
 const createPlanVersion = `-- name: CreatePlanVersion :one
 INSERT INTO plan_versions (trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -168,5 +183,22 @@ type SetPlanVersionStatusParams struct {
 
 func (q *Queries) SetPlanVersionStatus(ctx context.Context, arg SetPlanVersionStatusParams) error {
 	_, err := q.db.Exec(ctx, setPlanVersionStatus, arg.ID, arg.Status)
+	return err
+}
+
+const supersedeOtherVersions = `-- name: SupersedeOtherVersions :exec
+UPDATE plan_versions SET status = 'superseded'
+WHERE trip_id = (SELECT trip_id FROM runs WHERE runs.id = $1)
+  AND seq <> $2
+  AND status = 'accepted'
+`
+
+type SupersedeOtherVersionsParams struct {
+	ID  string `json:"id"`
+	Seq int32  `json:"seq"`
+}
+
+func (q *Queries) SupersedeOtherVersions(ctx context.Context, arg SupersedeOtherVersionsParams) error {
+	_, err := q.db.Exec(ctx, supersedeOtherVersions, arg.ID, arg.Seq)
 	return err
 }

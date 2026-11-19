@@ -19,3 +19,13 @@ ORDER BY seq DESC;
 
 -- name: SetPlanVersionStatus :exec
 UPDATE plan_versions SET status = $2 WHERE id = $1;
+
+-- name: AcceptPlanVersionBySeq :exec
+UPDATE plan_versions SET status = 'accepted'
+WHERE trip_id = (SELECT trip_id FROM runs WHERE runs.id = $1) AND seq = $2;
+
+-- name: SupersedeOtherVersions :exec
+UPDATE plan_versions SET status = 'superseded'
+WHERE trip_id = (SELECT trip_id FROM runs WHERE runs.id = $1)
+  AND seq <> $2
+  AND status = 'accepted';

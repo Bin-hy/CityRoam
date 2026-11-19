@@ -16,12 +16,25 @@ type statusUpdate struct {
 	stage  string
 }
 
+type savedVersion struct {
+	runID    string
+	snapshot VersionSnapshot
+	status   string
+}
+
+type acceptedVersion struct {
+	runID string
+	seq   int
+}
+
 type fakeRunStore struct {
 	mu       sync.Mutex
 	runs     map[string]RunRecord
 	states   map[string][]byte
 	stages   map[string][]string
 	statuses []statusUpdate
+	versions []savedVersion
+	accepted []acceptedVersion
 }
 
 func newFakeRunStore(runs ...RunRecord) *fakeRunStore {
@@ -93,6 +106,20 @@ func (s *fakeRunStore) UpdateRunStatus(_ context.Context, runID, status, stage s
 	run.Stage = stage
 	s.runs[runID] = run
 	s.statuses = append(s.statuses, statusUpdate{runID: runID, status: status, stage: stage})
+	return nil
+}
+
+func (s *fakeRunStore) SaveVersion(_ context.Context, runID string, snapshot VersionSnapshot, status string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.versions = append(s.versions, savedVersion{runID: runID, snapshot: snapshot, status: status})
+	return nil
+}
+
+func (s *fakeRunStore) AcceptVersion(_ context.Context, runID string, seq int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accepted = append(s.accepted, acceptedVersion{runID: runID, seq: seq})
 	return nil
 }
 

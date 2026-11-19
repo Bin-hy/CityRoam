@@ -230,7 +230,7 @@ func TestRouter(t *testing.T) {
 
 	t.Run("unimplemented endpoints share the envelope", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/trips/x/versions", nil))
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/runs/x", nil))
 		if rec.Code != http.StatusNotImplemented {
 			t.Fatalf("status = %d", rec.Code)
 		}

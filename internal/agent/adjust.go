@@ -66,7 +66,7 @@ func (n *Nodes) Adjust(ctx context.Context, in AdjustInput) (AdjustOutput, error
 		return AdjustOutput{}, err
 	}
 	candidates := mergeCandidates(maxCandidates, in.Candidates, retrieved)
-	allowed := adjustmentPOIs(in, candidates)
+	allowed := adjustmentPOIs(in, candidates, n.lookup)
 	alternatives := adjustmentAlternatives(in.BasePlan, candidates, affected)
 
 	alternativesJSON, err := json.Marshal(alternatives)
@@ -314,7 +314,7 @@ func adjustmentAlternatives(plan domain.Itinerary, candidates []domain.POI, days
 	return out
 }
 
-func adjustmentPOIs(in AdjustInput, candidates []domain.POI) map[string]domain.POI {
+func adjustmentPOIs(in AdjustInput, candidates []domain.POI, lookup POILookup) map[string]domain.POI {
 	pois := make(map[string]domain.POI, len(in.POIs)+len(candidates))
 	for id, poi := range in.POIs {
 		pois[id] = poi
@@ -332,6 +332,12 @@ func adjustmentPOIs(in AdjustInput, candidates []domain.POI) map[string]domain.P
 			}
 			if _, exists := pois[block.POIID]; exists {
 				continue
+			}
+			if lookup != nil {
+				if poi, found := lookup.Get(block.POIID); found {
+					pois[block.POIID] = poi
+					continue
+				}
 			}
 			pois[block.POIID] = domain.POI{ID: block.POIID, Name: block.Title, City: in.Constraints.City}
 		}

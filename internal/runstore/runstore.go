@@ -110,3 +110,55 @@ func terminal(status string) bool {
 		return false
 	}
 }
+
+// SaveVersion persists a presented snapshot. The version sequence comes from
+// the snapshot so the client-visible numbering matches storage.
+func (s *Store) SaveVersion(ctx context.Context, runID string, snapshot agent.VersionSnapshot, status string) error {
+	run, err := s.store.GetRun(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("runstore: get run for version: %w", err)
+	}
+	plan, err := json.Marshal(snapshot.Plan)
+	if err != nil {
+		return fmt.Errorf("runstore: encode plan: %w", err)
+	}
+	constraints, err := json.Marshal(snapshot.Constraints)
+	if err != nil {
+		return fmt.Errorf("runstore: encode constraints: %w", err)
+	}
+	violations, err := json.Marshal(snapshot.Violations)
+	if err != nil {
+		return fmt.Errorf("runstore: encode violations: %w", err)
+	}
+	diffSummary, err := json.Marshal(snapshot.Diff)
+	if err != nil {
+		return fmt.Errorf("runstore: encode diff: %w", err)
+	}
+	var reason *string
+	if snapshot.Reason != "" {
+		value := snapshot.Reason
+		reason = &value
+	}
+	_, err = s.store.SaveVersion(ctx, repo.CreatePlanVersionParams{
+		TripID:      run.TripID,
+		RunID:       runID,
+		Seq:         int32(snapshot.Seq),
+		Plan:        plan,
+		Constraints: constraints,
+		Violations:  violations,
+		DiffSummary: diffSummary,
+		Reason:      reason,
+		Status:      status,
+	})
+	if err != nil {
+		return fmt.Errorf("runstore: save version: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) AcceptVersion(ctx context.Context, runID string, seq int) error {
+	if err := s.store.AcceptPlanVersion(ctx, runID, int32(seq)); err != nil {
+		return fmt.Errorf("runstore: accept version: %w", err)
+	}
+	return nil
+}

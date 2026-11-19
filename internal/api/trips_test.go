@@ -109,6 +109,77 @@ func (s *fakeTripStore) ListPlanVersions(_ context.Context, tripID string) ([]re
 	return append([]repo.PlanVersion{}, s.versions[tripID]...), nil
 }
 
+func (s *fakeTripStore) GetPlanVersionBySeq(_ context.Context, tripID string, seq int32) (repo.PlanVersion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, version := range s.versions[tripID] {
+		if version.Seq == seq {
+			return version, nil
+		}
+	}
+	return repo.PlanVersion{}, pgx.ErrNoRows
+}
+
+func (s *fakeTripStore) GetRunByRequestID(_ context.Context, requestID string) (repo.Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, runs := range s.runs {
+		for _, run := range runs {
+			if run.RequestID != nil && *run.RequestID == requestID {
+				return run, nil
+			}
+		}
+	}
+	return repo.Run{}, pgx.ErrNoRows
+}
+
+func (s *fakeTripStore) CreateRun(_ context.Context, arg repo.CreateRunParams) (repo.Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.next++
+	run := repo.Run{
+		ID:            fmt.Sprintf("run-%d", s.next),
+		TripID:        arg.TripID,
+		Mode:          arg.Mode,
+		Status:        arg.Status,
+		Stage:         arg.Stage,
+		Input:         arg.Input,
+		Constraints:   arg.Constraints,
+		BaseVersionID: arg.BaseVersionID,
+		RequestID:     arg.RequestID,
+		CreatedAt:     time.Unix(1700000000, 0).UTC(),
+	}
+	s.runs[arg.TripID] = append([]repo.Run{run}, s.runs[arg.TripID]...)
+	return run, nil
+}
+
+func (s *fakeTripStore) SaveRunState(_ context.Context, arg repo.UpdateRunStateParams) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	runs := s.runs[s.runsTrip(arg.ID)]
+	for i := range runs {
+		if runs[i].ID == arg.ID {
+			runs[i].State = arg.State
+			runs[i].Stage = arg.Stage
+			runs[i].Status = arg.Status
+			s.runs[runs[i].TripID] = runs
+			return nil
+		}
+	}
+	return fmt.Errorf("run not found")
+}
+
+func (s *fakeTripStore) runsTrip(runID string) string {
+	for tripID, runs := range s.runs {
+		for _, run := range runs {
+			if run.ID == runID {
+				return tripID
+			}
+		}
+	}
+	return ""
+}
+
 type fakeRunner struct {
 	mu      sync.Mutex
 	started []string

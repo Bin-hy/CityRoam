@@ -86,6 +86,7 @@ func run() error {
 	}
 	nodeOptions := []agent.NodeOption{
 		agent.WithSnapshotSource(snapshot),
+		agent.WithPOILookup(snapshot),
 		agent.WithRouteProvider(tools.NewRouteService(amap, "beijing")),
 		agent.WithNodeLogger(logger),
 	}

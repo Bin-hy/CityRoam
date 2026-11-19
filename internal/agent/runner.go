@@ -30,6 +30,8 @@ type RunStore interface {
 	ListRunsByStatus(ctx context.Context, statuses []string) ([]RunRecord, error)
 	SaveRunState(ctx context.Context, runID string, state json.RawMessage) error
 	UpdateRunStatus(ctx context.Context, runID, status, stage string) error
+	SaveVersion(ctx context.Context, runID string, snapshot VersionSnapshot, status string) error
+	AcceptVersion(ctx context.Context, runID string, seq int) error
 }
 
 type ResumeKind string
@@ -252,7 +254,13 @@ func (r *Runner) Resume(ctx context.Context, runID string, action ResumeAction) 
 			if err != nil {
 				return fmt.Errorf("runner: snapshot accepted plan: %w", err)
 			}
+			if err := r.store.SaveVersion(ctx, runID, out.Snapshot, "accepted"); err != nil {
+				return fmt.Errorf("runner: save accepted version: %w", err)
+			}
 			state.Snapshot = &out.Snapshot
+		}
+		if err := r.store.AcceptVersion(ctx, runID, state.Snapshot.Seq); err != nil {
+			return fmt.Errorf("runner: accept version: %w", err)
 		}
 		state.Status = StatusCompleted
 		state.Stage = "accepted"
@@ -382,6 +390,12 @@ func (r *Runner) execute(ctx context.Context, state *TripState) {
 		return
 	}
 
+	if out.Snapshot != nil {
+		if err := r.store.SaveVersion(ctx, out.RunID, *out.Snapshot, "draft"); err != nil {
+			r.fail(ctx, state, err)
+			return
+		}
+	}
 	stage = nodePresent
 	if out.Snapshot == nil {
 		stage = nodeParse

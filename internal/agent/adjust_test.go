@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"trippilot/internal/domain"
+	schedulerimpl "trippilot/internal/domain/scheduler"
 )
 
 type draftScheduler struct {
@@ -80,6 +82,58 @@ func adjustmentSource() *fakeSource {
 	return &fakeSource{fn: func(context.Context, domain.POIQuery) ([]domain.POI, error) {
 		return []domain.POI{{ID: "p2", City: "beijing", Name: "国博", Category: "历史"}}, nil
 	}}
+}
+
+type lookupPOIs map[string]domain.POI
+
+func (l lookupPOIs) Get(id string) (domain.POI, bool) {
+	poi, found := l[id]
+	return poi, found
+}
+
+func TestAdjustmentKeepsUntouchedDaysWithLookup(t *testing.T) {
+	ticket := 20
+	pois := map[string]domain.POI{
+		"p0": {ID: "p0", City: "beijing", Name: "故宫", Category: "历史", TicketYuan: &ticket},
+		"p1": {ID: "p1", City: "beijing", Name: "天坛", Category: "历史", TicketYuan: &ticket},
+		"p2": {ID: "p2", City: "beijing", Name: "国博", Category: "历史", TicketYuan: &ticket},
+	}
+	constraints := domain.ConstraintSet{City: "beijing", Days: 2, StartDate: "2026-11-20"}
+	draft := domain.DraftPlan{Days: []domain.DraftDay{
+		{Date: "2026-11-20", Items: []domain.DraftItem{{POIID: "p0", Type: domain.ItemTypePOI, DurationMin: 90}}},
+		{Date: "2026-11-21", Items: []domain.DraftItem{{POIID: "p1", Type: domain.ItemTypePOI, DurationMin: 90}}},
+	}}
+	realScheduler := schedulerimpl.New()
+	basePlan, err := realScheduler.Build(draft, constraints, pois, nil)
+	if err != nil {
+		t.Fatalf("build base: %v", err)
+	}
+
+	llm := &fakeLLM{replies: []json.RawMessage{
+		json.RawMessage(`{"scope":"day","affected_days":[0],"summary":"换掉第一天"}`),
+		json.RawMessage(`{"day_index":0,"items":[{"poi_id":"p2","type":"poi","duration_min":90}],"reason":"换成国博"}`),
+	}}
+	nodes := NewNodes(llm, &eventRecorder{},
+		WithSnapshotSource(adjustmentSource()),
+		WithPOILookup(lookupPOIs(pois)),
+		WithScheduler(realScheduler),
+		WithValidator(&fakeValidator{}),
+		WithNodeLogger(discardLogger()),
+	)
+	out, err := nodes.Adjust(context.Background(), AdjustInput{
+		RunID:       "run-lookup",
+		Input:       "把第一天换成别的博物馆",
+		Constraints: constraints,
+		BasePlan:    basePlan,
+		BaseDraft:   draft,
+		BaseVersion: 1,
+	})
+	if err != nil {
+		t.Fatalf("adjust: %v", err)
+	}
+	if !reflect.DeepEqual(basePlan.Days[1], out.Plan.Days[1]) {
+		t.Fatalf("untouched day changed:\nbefore %+v\nafter  %+v", basePlan.Days[1], out.Plan.Days[1])
+	}
 }
 
 func TestAdjustment(t *testing.T) {

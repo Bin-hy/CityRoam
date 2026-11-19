@@ -41,6 +41,7 @@ type Nodes struct {
 	now            func() time.Time
 	snapshot       CandidateSource
 	external       CandidateSource
+	lookup         POILookup
 	candidateLimit int
 	scheduler      Scheduler
 	validator      Validator
