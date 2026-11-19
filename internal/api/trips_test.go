@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"trippilot/internal/agent"
 	"trippilot/internal/repo"
 )
 
@@ -169,6 +170,19 @@ func (s *fakeTripStore) SaveRunState(_ context.Context, arg repo.UpdateRunStateP
 	return fmt.Errorf("run not found")
 }
 
+func (s *fakeTripStore) GetRun(_ context.Context, id string) (repo.Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, runs := range s.runs {
+		for _, run := range runs {
+			if run.ID == id {
+				return run, nil
+			}
+		}
+	}
+	return repo.Run{}, pgx.ErrNoRows
+}
+
 func (s *fakeTripStore) runsTrip(runID string) string {
 	for tripID, runs := range s.runs {
 		for _, run := range runs {
@@ -181,9 +195,13 @@ func (s *fakeTripStore) runsTrip(runID string) string {
 }
 
 type fakeRunner struct {
-	mu      sync.Mutex
-	started []string
-	keys    []string
+	mu        sync.Mutex
+	started   []string
+	keys      []string
+	resumed   []agent.ResumeAction
+	cancelled []string
+	resumeErr error
+	cancelErr error
 }
 
 func (r *fakeRunner) Start(_ context.Context, runID string) error {
@@ -199,6 +217,20 @@ func (r *fakeRunner) StartRequest(_ context.Context, runID, requestID string) er
 	r.started = append(r.started, runID)
 	r.keys = append(r.keys, requestID)
 	return nil
+}
+
+func (r *fakeRunner) Resume(_ context.Context, _ string, action agent.ResumeAction) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resumed = append(r.resumed, action)
+	return r.resumeErr
+}
+
+func (r *fakeRunner) Cancel(_ context.Context, runID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cancelled = append(r.cancelled, runID)
+	return r.cancelErr
 }
 
 func tripRouter(store TripStore, runner RunStarter) http.Handler {

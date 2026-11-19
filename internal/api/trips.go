@@ -31,12 +31,15 @@ type TripStore interface {
 	GetRunByRequestID(ctx context.Context, requestID string) (repo.Run, error)
 	CreateRun(ctx context.Context, arg repo.CreateRunParams) (repo.Run, error)
 	SaveRunState(ctx context.Context, arg repo.UpdateRunStateParams) error
+	GetRun(ctx context.Context, id string) (repo.Run, error)
 }
 
 // RunStarter is implemented by agent.Runner.
 type RunStarter interface {
 	Start(ctx context.Context, runID string) error
 	StartRequest(ctx context.Context, runID, requestID string) error
+	Resume(ctx context.Context, runID string, action agent.ResumeAction) error
+	Cancel(ctx context.Context, runID string) error
 }
 
 type createTripRequest struct {
