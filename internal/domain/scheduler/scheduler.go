@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"time"
 
 	"trippilot/internal/domain"
 )
@@ -14,7 +13,6 @@ const (
 	crossAreaBufferMin   = 20
 	walkModeMaxMeters    = 1500
 	estimatedTransitYuan = 2
-	minutesPerDay        = 24 * 60
 	earthRadiusMeters    = 6371000
 )
 
@@ -31,7 +29,7 @@ func (s *Scheduler) Build(
 	routes domain.RouteProvider,
 ) (domain.Itinerary, error) {
 	constraints = constraints.ApplyDefaults()
-	dayStart, err := parseClock(constraints.Daily.StartTime)
+	dayStart, err := domain.ParseClock(constraints.Daily.StartTime)
 	if err != nil {
 		return domain.Itinerary{}, fmt.Errorf("scheduler: invalid day start: %w", err)
 	}
@@ -78,8 +76,8 @@ func (s *Scheduler) Build(
 					ID:          nextBlockID(),
 					Type:        domain.BlockTypeTransit,
 					Title:       "前往 " + displayName(poi),
-					Start:       formatClock(current),
-					End:         formatClock(current + transitMinutes),
+					Start:       domain.FormatClock(current),
+					End:         domain.FormatClock(current + transitMinutes),
 					DurationMin: transitMinutes,
 					CostYuan:    transport.CostYuan,
 					Transport:   &transport,
@@ -90,14 +88,14 @@ func (s *Scheduler) Build(
 			}
 
 			startAt := arrival
-			if hint, err := parseClock(item.StartHint); err == nil && hint > startAt {
+			if hint, err := domain.ParseClock(item.StartHint); err == nil && hint > startAt {
 				wait := hint - startAt
 				blocks = append(blocks, domain.Block{
 					ID:          nextBlockID(),
 					Type:        domain.BlockTypeRest,
-					Title:       "等待至 " + formatClock(hint),
-					Start:       formatClock(startAt),
-					End:         formatClock(hint),
+					Title:       "等待至 " + domain.FormatClock(hint),
+					Start:       domain.FormatClock(startAt),
+					End:         domain.FormatClock(hint),
 					DurationMin: wait,
 					Notes:       "早到，等待开始时间",
 				})
@@ -119,8 +117,8 @@ func (s *Scheduler) Build(
 				Type:        blockType,
 				POIID:       poi.ID,
 				Title:       displayName(poi),
-				Start:       formatClock(startAt),
-				End:         formatClock(startAt + duration),
+				Start:       domain.FormatClock(startAt),
+				End:         domain.FormatClock(startAt + duration),
 				DurationMin: duration,
 				CostYuan:    cost,
 			})
@@ -129,7 +127,7 @@ func (s *Scheduler) Build(
 			hasPrevious = true
 		}
 
-		dayEnd := formatClock(dayStart)
+		dayEnd := domain.FormatClock(dayStart)
 		if len(blocks) > 0 {
 			dayEnd = blocks[len(blocks)-1].End
 		}
@@ -137,7 +135,7 @@ func (s *Scheduler) Build(
 		dayCost, poiCount, walkingMeters := summarize(blocks)
 		itinerary.Days = append(itinerary.Days, domain.DayPlan{
 			Date:        draftDay.Date,
-			StartTime:   formatClock(dayStart),
+			StartTime:   domain.FormatClock(dayStart),
 			EndTime:     dayEnd,
 			Blocks:      blocks,
 			DayCostYuan: dayCost,
@@ -148,19 +146,6 @@ func (s *Scheduler) Build(
 	}
 
 	return itinerary, nil
-}
-
-func parseClock(value string) (int, error) {
-	parsed, err := time.Parse("15:04", value)
-	if err != nil || parsed.Format("15:04") != value {
-		return 0, fmt.Errorf("%q must use HH:MM 24-hour format", value)
-	}
-	return parsed.Hour()*60 + parsed.Minute(), nil
-}
-
-func formatClock(minutes int) string {
-	minutes = ((minutes % minutesPerDay) + minutesPerDay) % minutesPerDay
-	return fmt.Sprintf("%02d:%02d", minutes/60, minutes%60)
 }
 
 func itemDuration(item domain.DraftItem, poi domain.POI) (int, error) {

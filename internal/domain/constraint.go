@@ -3,7 +3,6 @@ package domain
 import (
 	"fmt"
 	"strings"
-	"time"
 )
 
 // ConstraintSet is the structured interpretation of a user's request.
@@ -234,8 +233,8 @@ func (c ConstraintSet) Validate() error {
 }
 
 func isClock(value string) bool {
-	parsed, err := time.Parse("15:04", value)
-	return err == nil && parsed.Format("15:04") == value
+	_, err := ParseClock(value)
+	return err == nil
 }
 
 func cloneStrings(values []string) []string {

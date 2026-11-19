@@ -111,12 +111,6 @@ func containsDay(days []int, day int) bool {
 }
 
 func clockMinutes(value string) (int, bool) {
-	if !isClock(value) {
-		return 0, false
-	}
-	parsed, err := time.Parse("15:04", value)
-	if err != nil {
-		return 0, false
-	}
-	return parsed.Hour()*60 + parsed.Minute(), true
+	minutes, err := ParseClock(value)
+	return minutes, err == nil
 }
