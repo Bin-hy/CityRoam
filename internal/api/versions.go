@@ -224,6 +224,74 @@ func handleGetVersion(deps Deps) http.HandlerFunc {
 	}
 }
 
+func handleRestoreVersion(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tripID := chi.URLParam(r, "tripID")
+		seq, err := strconv.ParseInt(chi.URLParam(r, "seq"), 10, 32)
+		if err != nil || seq <= 0 {
+			WriteError(w, r, &Error{Status: http.StatusBadRequest, Code: "invalid_seq", Message: "版本号不合法"})
+			return
+		}
+		if _, err := deps.Store.GetTrip(r.Context(), tripID); err != nil {
+			WriteError(w, r, mapStoreError(err))
+			return
+		}
+		source, err := deps.Store.GetPlanVersionBySeq(r.Context(), tripID, int32(seq))
+		if err != nil {
+			WriteError(w, r, mapVersionError(err))
+			return
+		}
+		versions, err := deps.Store.ListPlanVersions(r.Context(), tripID)
+		if err != nil {
+			WriteError(w, r, errInternal(err))
+			return
+		}
+		var current *repo.PlanVersion
+		for index := range versions {
+			if versions[index].Status == "accepted" {
+				current = &versions[index]
+				break
+			}
+		}
+		if current != nil && current.Seq == source.Seq {
+			WriteError(w, r, &Error{Status: http.StatusConflict, Code: "version_already_current", Message: "该版本已是当前版本"})
+			return
+		}
+
+		diffSummary := json.RawMessage(`{"days":[],"blocks":[]}`)
+		if current != nil {
+			var before, after domain.Itinerary
+			if err := json.Unmarshal(current.Plan, &before); err != nil {
+				WriteError(w, r, errInternal(err))
+				return
+			}
+			if err := json.Unmarshal(source.Plan, &after); err != nil {
+				WriteError(w, r, errInternal(err))
+				return
+			}
+			encoded, err := json.Marshal(diff.Diff(before, after))
+			if err != nil {
+				WriteError(w, r, errInternal(err))
+				return
+			}
+			diffSummary = encoded
+		}
+
+		reason := "恢复到 v" + strconv.FormatInt(seq, 10)
+		restored, err := deps.Store.RestorePlanVersion(r.Context(), repo.RestorePlanVersionParams{
+			TripID:      tripID,
+			Seq:         int32(seq),
+			DiffSummary: diffSummary,
+			Reason:      &reason,
+		})
+		if err != nil {
+			WriteError(w, r, mapVersionError(err))
+			return
+		}
+		writeJSON(w, http.StatusCreated, restored)
+	}
+}
+
 func handleDiff(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tripID := chi.URLParam(r, "tripID")

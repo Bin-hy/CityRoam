@@ -105,6 +105,10 @@ vi.mock("@/features/timeline/ItineraryTimeline", () => ({
   ),
 }));
 
+vi.mock("@/features/versions/VersionPanel", () => ({
+  VersionPanel: () => <div>version-panel</div>,
+}));
+
 vi.mock("@/features/map/TripMap", () => ({
   TripMap: ({
     selectedBlockID,

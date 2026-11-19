@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -104,6 +105,56 @@ func (s *Store) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams) 
 		return fmt.Errorf("store: update run status: %w", err)
 	}
 	return nil
+}
+
+// RestorePlanVersionParams describes a rollback that copies an old version
+// into a new accepted version, keeping the history append-only.
+type RestorePlanVersionParams struct {
+	TripID      string
+	Seq         int32
+	DiffSummary json.RawMessage
+	Reason      *string
+}
+
+// RestorePlanVersion copies the selected version to a new accepted sequence
+// and supersedes the current accepted version in the same transaction.
+func (s *Store) RestorePlanVersion(ctx context.Context, arg RestorePlanVersionParams) (PlanVersion, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return PlanVersion{}, fmt.Errorf("store: begin restore version: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	q := s.q.WithTx(tx)
+	source, err := q.GetPlanVersionBySeq(ctx, GetPlanVersionBySeqParams{TripID: arg.TripID, Seq: arg.Seq})
+	if err != nil {
+		return PlanVersion{}, err
+	}
+	seq, err := q.NextPlanVersionSeq(ctx, arg.TripID)
+	if err != nil {
+		return PlanVersion{}, fmt.Errorf("store: next restore seq: %w", err)
+	}
+	restored, err := q.CreatePlanVersion(ctx, CreatePlanVersionParams{
+		TripID:      arg.TripID,
+		RunID:       source.RunID,
+		Seq:         seq,
+		Plan:        source.Plan,
+		Constraints: source.Constraints,
+		Violations:  source.Violations,
+		DiffSummary: arg.DiffSummary,
+		Reason:      arg.Reason,
+		Status:      "accepted",
+	})
+	if err != nil {
+		return PlanVersion{}, fmt.Errorf("store: create restored version: %w", err)
+	}
+	if err := q.SupersedeOtherVersions(ctx, SupersedeOtherVersionsParams{ID: source.RunID, Seq: seq}); err != nil {
+		return PlanVersion{}, fmt.Errorf("store: supersede versions: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return PlanVersion{}, fmt.Errorf("store: commit restore version: %w", err)
+	}
+	return restored, nil
 }
 
 // SaveVersion allocates the next sequence inside a transaction so concurrent

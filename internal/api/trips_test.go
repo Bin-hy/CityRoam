@@ -137,6 +137,46 @@ func (s *fakeTripStore) GetPlanVersion(_ context.Context, id string) (repo.PlanV
 	return repo.PlanVersion{}, pgx.ErrNoRows
 }
 
+func (s *fakeTripStore) RestorePlanVersion(_ context.Context, arg repo.RestorePlanVersionParams) (repo.PlanVersion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	versions := s.versions[arg.TripID]
+	var source repo.PlanVersion
+	var maxSeq int32
+	found := false
+	for _, version := range versions {
+		if version.Seq > maxSeq {
+			maxSeq = version.Seq
+		}
+		if version.Seq == arg.Seq {
+			source, found = version, true
+		}
+	}
+	if !found {
+		return repo.PlanVersion{}, pgx.ErrNoRows
+	}
+	restored := repo.PlanVersion{
+		ID:          fmt.Sprintf("v-restored-%d", maxSeq+1),
+		TripID:      arg.TripID,
+		RunID:       source.RunID,
+		Seq:         maxSeq + 1,
+		Plan:        source.Plan,
+		Constraints: source.Constraints,
+		Violations:  source.Violations,
+		DiffSummary: arg.DiffSummary,
+		Reason:      arg.Reason,
+		Status:      "accepted",
+		CreatedAt:   time.Unix(1700000000, 0).UTC(),
+	}
+	for i := range versions {
+		if versions[i].Status == "accepted" {
+			versions[i].Status = "superseded"
+		}
+	}
+	s.versions[arg.TripID] = append([]repo.PlanVersion{restored}, versions...)
+	return restored, nil
+}
+
 func (s *fakeTripStore) CreateShareLink(_ context.Context, tripID, versionID string) (repo.ShareLink, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

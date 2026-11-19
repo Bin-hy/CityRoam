@@ -151,6 +151,34 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
 
+  /api/trips/{tripID}/versions/{seq}/restore:
+    parameters:
+      - $ref: "#/components/parameters/TripID"
+      - name: seq
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    post:
+      operationId: restorePlanVersion
+      summary: Roll back to a previous version by copying it to a new accepted version
+      responses:
+        "201":
+          description: Restored plan version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanVersion"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+
   /api/trips/{tripID}/diff:
     parameters:
       - $ref: "#/components/parameters/TripID"

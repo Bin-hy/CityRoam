@@ -56,6 +56,7 @@ func NewRouter(deps Deps) http.Handler {
 			public.Post("/trips", handleCreateTrip(deps))
 			public.Delete("/trips/{tripID}", handleDeleteTrip(deps))
 			public.Post("/trips/{tripID}/adjustments", handleCreateAdjustment(deps))
+			public.Post("/trips/{tripID}/versions/{seq}/restore", handleRestoreVersion(deps))
 			public.Post("/trips/{tripID}/share", handleCreateShare(deps))
 			public.Post("/runs/{runID}/resume", handleResumeRun(deps))
 			public.Post("/runs/{runID}/cancel", handleCancelRun(deps))

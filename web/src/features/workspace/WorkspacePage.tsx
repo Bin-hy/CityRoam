@@ -13,6 +13,7 @@ import { RunTrace } from "@/features/trace/RunTrace";
 import { ItineraryTimeline } from "@/features/timeline/ItineraryTimeline";
 import { TripMap } from "@/features/map/TripMap";
 import { BudgetPanel } from "@/features/budget/BudgetPanel";
+import { VersionPanel } from "@/features/versions/VersionPanel";
 import { stageLabels } from "@/features/trace/traceReducer";
 
 const terminalStatuses = new Set(["awaiting_user", "completed", "failed", "cancelled"]);
@@ -145,8 +146,12 @@ export function WorkspacePage() {
               <CardTitle>版本</CardTitle>
               <CardDescription>方案历史与差异。</CardDescription>
             </CardHeader>
-            <CardContent className="text-sm text-muted-foreground">
-              {trip.latest_version ? `当前 v${trip.latest_version.seq}` : "尚无版本"}
+            <CardContent>
+              <VersionPanel
+                tripID={trip.id}
+                currentVersion={trip.latest_version ?? null}
+                onRestored={() => void tripQuery.refetch()}
+              />
             </CardContent>
           </Card>
         </aside>

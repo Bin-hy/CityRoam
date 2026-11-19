@@ -139,6 +139,56 @@ func TestVersions(t *testing.T) {
 		}
 	})
 
+	t.Run("restores a version as a new accepted version", func(t *testing.T) {
+		store, trip, versions := versionFixture(t, versionPlan(30), versionPlan(50))
+		router := tripRouter(store, &fakeRunner{})
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/trips/"+trip.ID+"/versions/1/restore", nil))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("restore status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		var restored repo.PlanVersion
+		if err := json.Unmarshal(rec.Body.Bytes(), &restored); err != nil {
+			t.Fatalf("decode restored: %v", err)
+		}
+		if restored.Seq != 3 || restored.Status != "accepted" || restored.ID == versions[1].ID {
+			t.Fatalf("restored = %+v", restored)
+		}
+		if string(restored.Plan) != string(versions[1].Plan) {
+			t.Fatalf("plan not copied: %s vs %s", restored.Plan, versions[1].Plan)
+		}
+
+		list, err := store.ListPlanVersions(context.Background(), trip.ID)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		accepted := 0
+		for _, version := range list {
+			if version.Status == "accepted" {
+				accepted++
+				if version.Seq != 3 {
+					t.Fatalf("accepted version = %+v", version)
+				}
+			}
+		}
+		if accepted != 1 || len(list) != 3 {
+			t.Fatalf("versions = %+v", list)
+		}
+
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/trips/"+trip.ID+"/versions/3/restore", nil))
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("restore current status = %d body=%s", rec.Code, rec.Body.String())
+		}
+
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/trips/"+trip.ID+"/versions/0/restore", nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("restore invalid status = %d", rec.Code)
+		}
+	})
+
 	t.Run("diff requires two versions and validates the range", func(t *testing.T) {
 		store, trip, _ := versionFixture(t, versionPlan(30))
 		router := tripRouter(store, &fakeRunner{})

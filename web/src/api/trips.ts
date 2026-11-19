@@ -40,6 +40,12 @@ export function diffPlanVersions(tripID: string, from?: number, to?: number): Pr
   return apiRequest<VersionDiff>(`/api/trips/${encodeURIComponent(tripID)}/diff${suffix}`);
 }
 
+export function restorePlanVersion(tripID: string, seq: number): Promise<PlanVersion> {
+  return apiRequest<PlanVersion>(`/api/trips/${encodeURIComponent(tripID)}/versions/${seq}/restore`, {
+    method: "POST",
+  });
+}
+
 export function createAdjustment(tripID: string, body: AdjustmentRequest): Promise<RunAction> {
   return apiRequest<RunAction>(`/api/trips/${encodeURIComponent(tripID)}/adjustments`, {
     method: "POST",
