@@ -28,6 +28,9 @@ type TripStore interface {
 	ListRunsByTrip(ctx context.Context, tripID string) ([]repo.Run, error)
 	ListPlanVersions(ctx context.Context, tripID string) ([]repo.PlanVersion, error)
 	GetPlanVersionBySeq(ctx context.Context, tripID string, seq int32) (repo.PlanVersion, error)
+	GetPlanVersion(ctx context.Context, id string) (repo.PlanVersion, error)
+	CreateShareLink(ctx context.Context, tripID, versionID string) (repo.ShareLink, error)
+	GetShareLink(ctx context.Context, slug string) (repo.ShareLink, error)
 	GetRunByRequestID(ctx context.Context, requestID string) (repo.Run, error)
 	CreateRun(ctx context.Context, arg repo.CreateRunParams) (repo.Run, error)
 	SaveRunState(ctx context.Context, arg repo.UpdateRunStateParams) error

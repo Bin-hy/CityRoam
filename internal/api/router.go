@@ -55,7 +55,7 @@ func NewRouter(deps Deps) http.Handler {
 			public.Post("/trips", handleCreateTrip(deps))
 			public.Delete("/trips/{tripID}", handleDeleteTrip(deps))
 			public.Post("/trips/{tripID}/adjustments", handleCreateAdjustment(deps))
-			public.Post("/trips/{tripID}/share", handleNotImplemented())
+			public.Post("/trips/{tripID}/share", handleCreateShare(deps))
 			public.Post("/runs/{runID}/resume", handleResumeRun(deps))
 			public.Post("/runs/{runID}/cancel", handleCancelRun(deps))
 		})
@@ -69,7 +69,7 @@ func NewRouter(deps Deps) http.Handler {
 		api.Get("/runs/{runID}/trace", handleNotImplemented())
 		api.Get("/runs/{runID}/events", handleRunEvents(deps))
 
-		api.Get("/share/{slug}", handleNotImplemented())
+		api.Get("/share/{slug}", handleGetShare(deps))
 
 		api.Route("/eval", func(eval chi.Router) {
 			eval.Use(AdminToken(deps.AdminToken))

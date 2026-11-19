@@ -22,6 +22,8 @@ type fakeTripStore struct {
 	trips    map[string]repo.Trip
 	runs     map[string][]repo.Run
 	versions map[string][]repo.PlanVersion
+	shares   map[string]repo.ShareLink
+	shareSeq int
 	byReq    map[string]string
 	deleted  map[string]bool
 	next     int
@@ -32,6 +34,7 @@ func newFakeTripStore() *fakeTripStore {
 		trips:    make(map[string]repo.Trip),
 		runs:     make(map[string][]repo.Run),
 		versions: make(map[string][]repo.PlanVersion),
+		shares:   make(map[string]repo.ShareLink),
 		byReq:    make(map[string]string),
 		deleted:  make(map[string]bool),
 	}
@@ -119,6 +122,43 @@ func (s *fakeTripStore) GetPlanVersionBySeq(_ context.Context, tripID string, se
 		}
 	}
 	return repo.PlanVersion{}, pgx.ErrNoRows
+}
+
+func (s *fakeTripStore) GetPlanVersion(_ context.Context, id string) (repo.PlanVersion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, versions := range s.versions {
+		for _, version := range versions {
+			if version.ID == id {
+				return version, nil
+			}
+		}
+	}
+	return repo.PlanVersion{}, pgx.ErrNoRows
+}
+
+func (s *fakeTripStore) CreateShareLink(_ context.Context, tripID, versionID string) (repo.ShareLink, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shareSeq++
+	link := repo.ShareLink{
+		Slug:      fmt.Sprintf("share%04d", s.shareSeq),
+		TripID:    tripID,
+		VersionID: versionID,
+		CreatedAt: time.Unix(1700000000, 0).UTC(),
+	}
+	s.shares[link.Slug] = link
+	return link, nil
+}
+
+func (s *fakeTripStore) GetShareLink(_ context.Context, slug string) (repo.ShareLink, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	link, found := s.shares[slug]
+	if !found || link.RevokedAt != nil {
+		return repo.ShareLink{}, pgx.ErrNoRows
+	}
+	return link, nil
 }
 
 func (s *fakeTripStore) GetRunByRequestID(_ context.Context, requestID string) (repo.Run, error) {

@@ -195,6 +195,10 @@ func (s *Store) GetPlanVersionBySeq(ctx context.Context, tripID string, seq int3
 	return s.q.GetPlanVersionBySeq(ctx, GetPlanVersionBySeqParams{TripID: tripID, Seq: seq})
 }
 
+func (s *Store) GetPlanVersion(ctx context.Context, id string) (PlanVersion, error) {
+	return s.q.GetPlanVersion(ctx, id)
+}
+
 func (s *Store) SetPlanVersionStatus(ctx context.Context, id, status string) error {
 	return s.q.SetPlanVersionStatus(ctx, SetPlanVersionStatusParams{ID: id, Status: status})
 }
