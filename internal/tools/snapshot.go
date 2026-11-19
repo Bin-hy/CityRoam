@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"trippilot/data"
 	"trippilot/internal/domain"
 )
 
@@ -34,6 +35,16 @@ func LoadSnapshot(path string) (*Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tools: read snapshot: %w", err)
 	}
+	return parseSnapshot(raw)
+}
+
+// LoadEmbeddedSnapshot parses the snapshot compiled into the binary so the
+// container image does not depend on a working directory.
+func LoadEmbeddedSnapshot() (*Snapshot, error) {
+	return parseSnapshot(data.BeijingPOI)
+}
+
+func parseSnapshot(raw []byte) (*Snapshot, error) {
 	var pois []domain.POI
 	if err := json.Unmarshal(raw, &pois); err != nil {
 		return nil, fmt.Errorf("tools: parse snapshot: %w", err)

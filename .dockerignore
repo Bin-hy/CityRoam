@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+*.local
+*.local.*
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report
+web/e2e
+docs
+backups
+*.dump

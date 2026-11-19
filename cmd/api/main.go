@@ -28,7 +28,6 @@ import (
 
 const version = "0.1.0-dev"
 
-const poiSnapshotPath = "data/poi/beijing.json"
 const evalCasesPath = "eval/cases"
 
 func main() {
@@ -72,7 +71,7 @@ func run() error {
 	defer store.Close()
 	logger.Info("database ready")
 
-	snapshot, err := tools.LoadSnapshot(poiSnapshotPath)
+	snapshot, err := tools.LoadEmbeddedSnapshot()
 	if err != nil {
 		return err
 	}

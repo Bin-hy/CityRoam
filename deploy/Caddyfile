@@ -5,7 +5,17 @@
 		}
 	}
 
+	handle /healthz {
+		reverse_proxy api:8080
+	}
+
+	handle /readyz {
+		reverse_proxy api:8080
+	}
+
 	handle {
-		respond "TripPilot" 200
+		root * /srv
+		try_files {path} /index.html
+		file_server
 	}
 }

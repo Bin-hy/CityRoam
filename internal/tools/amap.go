@@ -67,7 +67,6 @@ type AMapPOI struct {
 	Name     string  `json:"name"`
 	Category string  `json:"category"`
 	Address  string  `json:"address"`
-	Tel      string  `json:"tel"`
 	Lat      float64 `json:"lat"`
 	Lng      float64 `json:"lng"`
 }
@@ -105,7 +104,6 @@ func (c *AMapClient) SearchPOI(ctx context.Context, keywords, city string) ([]AM
 			Type     string `json:"type"`
 			Address  string `json:"address"`
 			Location string `json:"location"`
-			Tel      string `json:"tel"`
 		} `json:"pois"`
 	}
 	if err := c.get(ctx, "/v3/place/text", params, &payload); err != nil {
@@ -123,7 +121,6 @@ func (c *AMapClient) SearchPOI(ctx context.Context, keywords, city string) ([]AM
 			Name:     item.Name,
 			Category: item.Type,
 			Address:  item.Address,
-			Tel:      item.Tel,
 			Lat:      lat,
 			Lng:      lng,
 		})

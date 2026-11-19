@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: trippilot
       POSTGRES_PASSWORD: trippilot
@@ -17,6 +18,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgres://trippilot:trippilot@postgres:5432/trippilot?sslmode=disable
       PORT: "8080"
@@ -26,6 +28,7 @@ services:
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       AMAP_WEB_KEY: ${AMAP_WEB_KEY:-}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      RATE_LIMIT_PER_HOUR: ${RATE_LIMIT_PER_HOUR:-10}
     depends_on:
       postgres:
         condition: service_healthy
@@ -34,10 +37,15 @@ services:
     build:
       context: ..
       dockerfile: deploy/web/Dockerfile
+      args:
+        VITE_AMAP_JS_KEY: ${VITE_AMAP_JS_KEY:-}
+        VITE_AMAP_SECURITY_CODE: ${VITE_AMAP_SECURITY_CODE:-}
+    restart: unless-stopped
     ports:
       - "80:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

@@ -24,8 +24,6 @@ import (
 	"trippilot/migrations"
 )
 
-const poiSnapshotPath = "data/poi/beijing.json"
-
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -79,7 +77,7 @@ func run() error {
 	}
 	defer store.Close()
 
-	snapshot, err := tools.LoadSnapshot(poiSnapshotPath)
+	snapshot, err := tools.LoadEmbeddedSnapshot()
 	if err != nil {
 		return err
 	}

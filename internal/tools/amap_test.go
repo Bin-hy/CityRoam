@@ -22,7 +22,7 @@ func TestAMap(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"status":"1","info":"OK","infocode":"10000","pois":[
-				{"id":"B00001","name":"故宫","type":"风景名胜","address":"景山前街4号","location":"116.3972,39.9163","tel":"010"}
+				{"id":"B00001","name":"故宫","type":"风景名胜","address":"景山前街4号","location":"116.3972,39.9163","tel":["010-85007421"]}
 			]}`)
 		}))
 		defer server.Close()
