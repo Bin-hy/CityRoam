@@ -49,16 +49,21 @@ func NewRepairTracker(maxRounds int) *RepairTracker {
 	return &RepairTracker{maxRounds: maxRounds, bestIndex: -1}
 }
 
-// Record stores one round. Round 0 is the initial draft, each repair adds one.
-func (t *RepairTracker) Record(plan domain.Itinerary, violations []domain.Violation) RoundMetrics {
+// MetricsFor summarizes a plan and its violations for comparison.
+func MetricsFor(round int, plan domain.Itinerary, violations []domain.Violation) RoundMetrics {
 	counts := domain.CountByLevel(violations)
-	metrics := RoundMetrics{
-		Round:     len(t.entries),
+	return RoundMetrics{
+		Round:     round,
 		Blocking:  counts[domain.LevelBlocking],
 		Warnings:  counts[domain.LevelWarning],
 		CostYuan:  plan.Totals.CostYuan,
 		WalkingKM: plan.Totals.WalkingKM,
 	}
+}
+
+// Record stores one round. Round 0 is the initial draft, each repair adds one.
+func (t *RepairTracker) Record(plan domain.Itinerary, violations []domain.Violation) RoundMetrics {
+	metrics := MetricsFor(len(t.entries), plan, violations)
 	entry := repairEntry{metrics: metrics, plan: plan, violations: append([]domain.Violation(nil), violations...)}
 	t.entries = append(t.entries, entry)
 
@@ -74,19 +79,39 @@ func (t *RepairTracker) Record(plan domain.Itinerary, violations []domain.Violat
 // ShouldStop applies, in order: user cancel, cleared, no improvement for two
 // consecutive rounds, then the three-round cap.
 func (t *RepairTracker) ShouldStop(cancelled bool) (bool, StopReason) {
+	return stopFromHistory(t.History(), t.maxRounds, cancelled)
+}
+
+// stopFromHistory is the stateless form used when the history is restored from
+// a persisted TripState.
+func stopFromHistory(history []RoundMetrics, maxRounds int, cancelled bool) (bool, StopReason) {
 	if cancelled {
 		return true, StopCancelled
 	}
-	if len(t.entries) == 0 {
+	if len(history) == 0 {
 		return false, ""
 	}
-	if t.entries[len(t.entries)-1].metrics.Blocking == 0 {
+	if history[len(history)-1].Blocking == 0 {
 		return true, StopCleared
 	}
-	if t.stagnant >= 2 {
+
+	best := history[0]
+	stagnant := 0
+	for _, metrics := range history[1:] {
+		if better(metrics, best) {
+			best = metrics
+			stagnant = 0
+			continue
+		}
+		stagnant++
+	}
+	if stagnant >= 2 {
 		return true, StopNoImprovement
 	}
-	if len(t.entries)-1 >= t.maxRounds {
+	if maxRounds <= 0 {
+		maxRounds = defaultMaxRepairRounds
+	}
+	if len(history)-1 >= maxRounds {
 		return true, StopMaxRounds
 	}
 	return false, ""
