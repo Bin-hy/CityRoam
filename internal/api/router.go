@@ -25,6 +25,7 @@ type Deps struct {
 	Broker           *events.Broker
 	Store            TripStore
 	Runner           RunStarter
+	Eval             EvalService
 }
 
 // NewRouter builds the public API. Handlers are filled in per endpoint card;
@@ -73,9 +74,9 @@ func NewRouter(deps Deps) http.Handler {
 
 		api.Route("/eval", func(eval chi.Router) {
 			eval.Use(AdminToken(deps.AdminToken))
-			eval.Get("/cases", handleNotImplemented())
-			eval.Post("/runs", handleNotImplemented())
-			eval.Get("/runs", handleNotImplemented())
+			eval.Get("/cases", handleListEvalCases(deps))
+			eval.Post("/runs", handleStartEval(deps))
+			eval.Get("/runs", handleListEvalRuns(deps))
 		})
 	})
 
