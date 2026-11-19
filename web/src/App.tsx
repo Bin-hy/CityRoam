@@ -2,7 +2,7 @@ import { Route, Routes } from "react-router-dom";
 import { CreatePage } from "@/features/create/CreatePage";
 import { EvalPage } from "@/pages/EvalPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
-import { SharePage } from "@/pages/SharePage";
+import { SharePage } from "@/features/share/SharePage";
 import { WorkspacePage } from "@/features/workspace/WorkspacePage";
 
 export function App() {
