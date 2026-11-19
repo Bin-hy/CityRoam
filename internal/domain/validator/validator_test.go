@@ -3,6 +3,7 @@ package validator
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"trippilot/internal/domain"
@@ -44,7 +45,7 @@ func TestC1(t *testing.T) {
 
 	t.Run("unknown hours becomes warning", func(t *testing.T) {
 		unknown := domain.POI{ID: "unknown", Name: "未知地点"}
-		violations := violationsFor(unknown, "2026-11-16", "10:00", domain.BlockTypePOI)
+		violations := violationsByCode(violationsFor(unknown, "2026-11-16", "10:00", domain.BlockTypePOI), "C1")
 		if len(violations) != 1 {
 			t.Fatalf("violations = %+v, want 1", violations)
 		}
@@ -52,7 +53,7 @@ func TestC1(t *testing.T) {
 	})
 
 	t.Run("invalid date becomes warning", func(t *testing.T) {
-		violations := violationsFor(museum, "", "10:00", domain.BlockTypePOI)
+		violations := violationsByCode(violationsFor(museum, "", "10:00", domain.BlockTypePOI), "C1")
 		if len(violations) != 1 {
 			t.Fatalf("violations = %+v, want 1", violations)
 		}
@@ -68,13 +69,17 @@ func TestC2(t *testing.T) {
 	}
 
 	t.Run("open weekday", func(t *testing.T) {
-		if violations := violationsFor(museum, "2026-11-16", "10:00", domain.BlockTypePOI); len(violations) != 0 {
-			t.Fatalf("violations = %+v, want none", violations)
+		violations := violationsFor(museum, "2026-11-16", "10:00", domain.BlockTypePOI)
+		if c1 := violationsByCode(violations, "C1"); len(c1) != 0 {
+			t.Fatalf("C1 violations = %+v, want none", c1)
+		}
+		if c2 := violationsByCode(violations, "C2"); len(c2) != 0 {
+			t.Fatalf("C2 violations = %+v, want none", c2)
 		}
 	})
 
 	t.Run("closed weekday", func(t *testing.T) {
-		violations := violationsFor(museum, "2026-11-17", "10:00", domain.BlockTypePOI)
+		violations := violationsByCode(violationsFor(museum, "2026-11-17", "10:00", domain.BlockTypePOI), "C2")
 		if len(violations) != 1 {
 			t.Fatalf("violations = %+v, want 1", violations)
 		}
@@ -84,10 +89,14 @@ func TestC2(t *testing.T) {
 	t.Run("unknown hours does not claim closed day", func(t *testing.T) {
 		unknown := domain.POI{ID: "unknown", Name: "未知地点"}
 		violations := violationsFor(unknown, "2026-11-17", "10:00", domain.BlockTypePOI)
-		if len(violations) != 1 {
-			t.Fatalf("violations = %+v, want only a C1 warning", violations)
+		if c2 := violationsByCode(violations, "C2"); len(c2) != 0 {
+			t.Fatalf("C2 violations = %+v, want none", c2)
 		}
-		assertViolation(t, violations[0], "C1", domain.LevelWarning)
+		c1 := violationsByCode(violations, "C1")
+		if len(c1) != 1 {
+			t.Fatalf("C1 violations = %+v, want one warning", c1)
+		}
+		assertViolation(t, c1[0], "C1", domain.LevelWarning)
 	})
 }
 
@@ -279,6 +288,140 @@ func TestC6(t *testing.T) {
 	})
 }
 
+func TestC7(t *testing.T) {
+	plan := poiPlan(1, "a", "b", "c", "d")
+	pois := map[string]domain.POI{}
+	for _, id := range []string{"a", "b", "c", "d"} {
+		pois[id] = openAllDayPOI(id, strings.ToUpper(id), "东城")
+	}
+
+	t.Run("all must-visit present", func(t *testing.T) {
+		constraints := domain.ConstraintSet{MustVisit: []string{"A", "c"}}
+		if c7 := violationsByCode(Validate(plan, constraints, pois, nil), "C7"); len(c7) != 0 {
+			t.Fatalf("C7 violations = %+v, want none", c7)
+		}
+	})
+
+	t.Run("missing must-visit", func(t *testing.T) {
+		constraints := domain.ConstraintSet{MustVisit: []string{"A", "故宫"}}
+		c7 := violationsByCode(Validate(plan, constraints, pois, nil), "C7")
+		if len(c7) != 1 {
+			t.Fatalf("C7 violations = %+v, want 1", c7)
+		}
+		if c7[0].Code != "C7" || c7[0].Level != domain.LevelBlocking {
+			t.Fatalf("violation = %+v, want blocking C7", c7[0])
+		}
+	})
+}
+
+func TestC8(t *testing.T) {
+	t.Run("duplicate within one day", func(t *testing.T) {
+		plan := domain.Itinerary{Days: []domain.DayPlan{{
+			Date:   "2026-11-16",
+			Blocks: []domain.Block{poiBlock("a", "09:00", 60), poiBlock("a", "11:00", 60)},
+		}}}
+		c8 := violationsByCode(Validate(plan, domain.ConstraintSet{}, nil, nil), "C8")
+		if len(c8) != 1 {
+			t.Fatalf("C8 violations = %+v, want 1", c8)
+		}
+		assertViolation(t, c8[0], "C8", domain.LevelBlocking)
+	})
+
+	t.Run("duplicate across days", func(t *testing.T) {
+		plan := domain.Itinerary{Days: []domain.DayPlan{
+			{Date: "2026-11-16", Blocks: []domain.Block{poiBlock("a", "09:00", 60)}},
+			{Date: "2026-11-17", Blocks: []domain.Block{poiBlock("a", "09:00", 60)}},
+		}}
+		c8 := violationsByCode(Validate(plan, domain.ConstraintSet{}, nil, nil), "C8")
+		if len(c8) != 1 {
+			t.Fatalf("C8 violations = %+v, want 1", c8)
+		}
+		if c8[0].Day != 2 {
+			t.Fatalf("C8 day = %d, want 2", c8[0].Day)
+		}
+	})
+
+	t.Run("no duplicates", func(t *testing.T) {
+		plan := poiPlan(1, "a", "b", "c", "d")
+		if c8 := violationsByCode(Validate(plan, domain.ConstraintSet{}, nil, nil), "C8"); len(c8) != 0 {
+			t.Fatalf("C8 violations = %+v, want none", c8)
+		}
+	})
+}
+
+func TestC9(t *testing.T) {
+	tests := []struct {
+		name      string
+		pace      domain.Pace
+		poiCount  int
+		wantCount int
+	}{
+		{name: "normal three", pace: domain.PaceNormal, poiCount: 3},
+		{name: "normal two", pace: domain.PaceNormal, poiCount: 2, wantCount: 1},
+		{name: "relaxed two", pace: domain.PaceRelaxed, poiCount: 2},
+		{name: "relaxed four", pace: domain.PaceRelaxed, poiCount: 4, wantCount: 1},
+		{name: "packed five", pace: domain.PacePacked, poiCount: 5},
+		{name: "packed three", pace: domain.PacePacked, poiCount: 3, wantCount: 1},
+	}
+
+	ids := []string{"a", "b", "c", "d", "e"}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := poiPlan(1, ids[:tt.poiCount]...)
+			c9 := violationsByCode(Validate(plan, domain.ConstraintSet{Pace: tt.pace}, nil, nil), "C9")
+			if len(c9) != tt.wantCount {
+				t.Fatalf("C9 violations = %+v, want %d", c9, tt.wantCount)
+			}
+			if tt.wantCount > 0 {
+				assertViolation(t, c9[0], "C9", domain.LevelWarning)
+			}
+		})
+	}
+}
+
+func TestC12(t *testing.T) {
+	poi := openAllDayPOI("poi", "景点", "东城")
+	poi.SuggestedMinutes = 120
+	pois := map[string]domain.POI{poi.ID: poi}
+
+	tests := []struct {
+		name        string
+		duration    int
+		wantWarning bool
+	}{
+		{name: "full stay", duration: 120},
+		{name: "at threshold", duration: 72},
+		{name: "below threshold", duration: 71, wantWarning: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := domain.Itinerary{Days: []domain.DayPlan{{
+				Date:   "2026-11-16",
+				Blocks: []domain.Block{poiBlock(poi.ID, "09:00", tt.duration)},
+			}}}
+			c12 := violationsByCode(Validate(plan, domain.ConstraintSet{}, pois, nil), "C12")
+			if tt.wantWarning {
+				if len(c12) != 1 {
+					t.Fatalf("C12 violations = %+v, want 1", c12)
+				}
+				assertViolation(t, c12[0], "C12", domain.LevelWarning)
+				return
+			}
+			if len(c12) != 0 {
+				t.Fatalf("C12 violations = %+v, want none", c12)
+			}
+		})
+	}
+
+	t.Run("meal blocks are ignored", func(t *testing.T) {
+		plan := mealPlan("12:00", "13:00")
+		if c12 := violationsByCode(Validate(plan, domain.ConstraintSet{}, nil, nil), "C12"); len(c12) != 0 {
+			t.Fatalf("C12 violations = %+v, want none", c12)
+		}
+	})
+}
+
 func TestC10(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -344,6 +487,31 @@ func singleBlockPlan(start, end string) (domain.Itinerary, map[string]domain.POI
 		}},
 	}
 	return plan, map[string]domain.POI{poi.ID: poi}
+}
+
+func poiPlan(days int, ids ...string) domain.Itinerary {
+	plan := domain.Itinerary{}
+	for day := 0; day < days; day++ {
+		blocks := make([]domain.Block, 0, len(ids))
+		for _, id := range ids {
+			blocks = append(blocks, poiBlock(id, "09:00", 60))
+		}
+		plan.Days = append(plan.Days, domain.DayPlan{Date: "2026-11-16", Blocks: blocks})
+	}
+	return plan
+}
+
+func poiBlock(id, start string, durationMin int) domain.Block {
+	startMinutes, _ := domain.ParseClock(start)
+	return domain.Block{
+		ID:          "b-" + id,
+		Type:        domain.BlockTypePOI,
+		POIID:       id,
+		Title:       id,
+		Start:       start,
+		End:         domain.FormatClock(startMinutes + durationMin),
+		DurationMin: durationMin,
+	}
 }
 
 func mealPlan(start, end string) domain.Itinerary {

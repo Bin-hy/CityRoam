@@ -3,6 +3,7 @@ package validator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"trippilot/internal/domain"
@@ -319,6 +320,162 @@ func absInt(value int) int {
 		return -value
 	}
 	return value
+}
+
+func checkC7(plan domain.Itinerary, pois map[string]domain.POI, constraints domain.ConstraintSet) []domain.Violation {
+	if len(constraints.MustVisit) == 0 {
+		return nil
+	}
+
+	present := make(map[string]struct{})
+	for _, day := range plan.Days {
+		for _, block := range day.Blocks {
+			if block.POIID == "" {
+				continue
+			}
+			present[normalizeName(block.POIID)] = struct{}{}
+			if block.Title != "" {
+				present[normalizeName(block.Title)] = struct{}{}
+			}
+			if poi, found := pois[block.POIID]; found && poi.Name != "" {
+				present[normalizeName(poi.Name)] = struct{}{}
+			}
+		}
+	}
+
+	violations := make([]domain.Violation, 0)
+	for _, required := range constraints.MustVisit {
+		if _, found := present[normalizeName(required)]; found {
+			continue
+		}
+		violations = append(violations, domain.Violation{
+			Code:       "C7",
+			Level:      domain.LevelBlocking,
+			Message:    fmt.Sprintf("必去点 %q 不在行程中", required),
+			Suggestion: "把必去点加入行程，或确认该点是否可预约",
+		})
+	}
+	return violations
+}
+
+func checkC8(plan domain.Itinerary) []domain.Violation {
+	firstDay := make(map[string]int)
+	violations := make([]domain.Violation, 0)
+
+	for dayIndex, day := range plan.Days {
+		seenToday := make(map[string]struct{})
+		for _, block := range day.Blocks {
+			if block.POIID == "" {
+				continue
+			}
+			if block.Type != domain.BlockTypePOI && block.Type != domain.BlockTypeMeal {
+				continue
+			}
+
+			if _, duplicated := seenToday[block.POIID]; duplicated {
+				violations = append(violations, domain.Violation{
+					Code:       "C8",
+					Level:      domain.LevelBlocking,
+					Day:        dayIndex + 1,
+					BlockID:    block.ID,
+					POIID:      block.POIID,
+					Message:    fmt.Sprintf("第 %d 天重复安排 %s", dayIndex+1, block.Title),
+					Suggestion: "删除重复点位，换成其他候选",
+				})
+				continue
+			}
+			seenToday[block.POIID] = struct{}{}
+
+			if day, found := firstDay[block.POIID]; found {
+				if day == dayIndex+1 {
+					continue
+				}
+				violations = append(violations, domain.Violation{
+					Code:       "C8",
+					Level:      domain.LevelBlocking,
+					Day:        dayIndex + 1,
+					BlockID:    block.ID,
+					POIID:      block.POIID,
+					Message:    fmt.Sprintf("%s 已在第 %d 天安排，不应跨天重复", block.Title, day),
+					Suggestion: "删除跨天重复点位，换成其他候选",
+				})
+				continue
+			}
+			firstDay[block.POIID] = dayIndex + 1
+		}
+	}
+	return violations
+}
+
+func checkC9(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.Violation {
+	minPOIs, maxPOIs := paceRange(constraints.Pace)
+	violations := make([]domain.Violation, 0)
+
+	for dayIndex, day := range plan.Days {
+		count := 0
+		for _, block := range day.Blocks {
+			if block.Type == domain.BlockTypePOI {
+				count++
+			}
+		}
+		if count >= minPOIs && count <= maxPOIs {
+			continue
+		}
+		violations = append(violations, domain.Violation{
+			Code:       "C9",
+			Level:      domain.LevelWarning,
+			Day:        dayIndex + 1,
+			Message:    fmt.Sprintf("第 %d 天安排 %d 个点位，%s 节奏建议 %d–%d 个", dayIndex+1, count, constraints.Pace, minPOIs, maxPOIs),
+			Suggestion: "增减点位或调整出行节奏",
+		})
+	}
+	return violations
+}
+
+func paceRange(pace domain.Pace) (int, int) {
+	switch pace {
+	case domain.PaceRelaxed:
+		return 2, 3
+	case domain.PacePacked:
+		return 4, 5
+	default:
+		return 3, 4
+	}
+}
+
+func checkC12(plan domain.Itinerary, pois map[string]domain.POI) []domain.Violation {
+	violations := make([]domain.Violation, 0)
+
+	for dayIndex, day := range plan.Days {
+		for _, block := range day.Blocks {
+			if block.Type != domain.BlockTypePOI || block.DurationMin <= 0 {
+				continue
+			}
+			poi, found := pois[block.POIID]
+			if !found || poi.SuggestedMinutes <= 0 {
+				continue
+			}
+
+			minimum := (poi.SuggestedMinutes*3 + 4) / 5
+			if block.DurationMin >= minimum {
+				continue
+			}
+			violations = append(violations, domain.Violation{
+				Code:       "C12",
+				Level:      domain.LevelWarning,
+				Day:        dayIndex + 1,
+				BlockID:    block.ID,
+				POIID:      block.POIID,
+				Message:    fmt.Sprintf("%s 停留 %d 分钟，低于建议时长的 60%%", block.Title, block.DurationMin),
+				Suggestion: fmt.Sprintf("至少停留 %d 分钟", minimum),
+			})
+		}
+	}
+	return violations
+}
+
+func normalizeName(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func checkC10(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.Violation {
