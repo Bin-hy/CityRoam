@@ -42,6 +42,9 @@ type Nodes struct {
 	snapshot       CandidateSource
 	external       CandidateSource
 	candidateLimit int
+	scheduler      Scheduler
+	validator      Validator
+	routes         domain.RouteProvider
 }
 
 type NodeOption func(*Nodes)
@@ -61,6 +64,8 @@ func NewNodes(llm LLMClient, events EventPublisher, opts ...NodeOption) *Nodes {
 		logger:         slog.Default(),
 		now:            time.Now,
 		candidateLimit: maxCandidates,
+		scheduler:      defaultScheduler(),
+		validator:      defaultValidator(),
 	}
 	for _, opt := range opts {
 		opt(n)
@@ -106,6 +111,9 @@ func (n *Nodes) Parse(ctx context.Context, in ParseInput) (ParseOutput, error) {
 		return ParseOutput{}, &NodeError{Code: "parse_decode_failed", Message: "解析结果不是合法约束", Err: err}
 	}
 	constraints = normalizeConstraints(constraints).ApplyDefaults()
+	if constraints.StartDate == "" {
+		constraints.StartDate = n.now().AddDate(0, 0, 1).Format("2006-01-02")
+	}
 
 	missing := constraints.MissingCritical()
 	constraints.Missing = missing

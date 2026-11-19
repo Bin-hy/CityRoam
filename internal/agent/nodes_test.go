@@ -16,17 +16,20 @@ type llmCall struct {
 
 type fakeLLM struct {
 	reply   json.RawMessage
+	replies []json.RawMessage
 	usage   Usage
 	err     error
 	calls   []llmCall
-	prompts []string
 }
 
 func (f *fakeLLM) GenerateJSON(ctx context.Context, prompt string, schema json.RawMessage) (json.RawMessage, Usage, error) {
+	index := len(f.calls)
 	f.calls = append(f.calls, llmCall{prompt: prompt, schema: schema})
-	f.prompts = append(f.prompts, prompt)
 	if f.err != nil {
 		return nil, f.usage, f.err
+	}
+	if index < len(f.replies) {
+		return f.replies[index], f.usage, nil
 	}
 	return f.reply, f.usage, nil
 }
@@ -84,6 +87,9 @@ func TestParseNode(t *testing.T) {
 		}
 		if out.Constraints.Pace != "normal" || out.Constraints.PartySize != 1 {
 			t.Fatalf("defaults not applied: %+v", out.Constraints)
+		}
+		if out.Constraints.StartDate != "2026-11-20" {
+			t.Fatalf("start date = %s", out.Constraints.StartDate)
 		}
 		if len(out.Constraints.Interests) != 2 {
 			t.Fatalf("interests = %+v", out.Constraints.Interests)
