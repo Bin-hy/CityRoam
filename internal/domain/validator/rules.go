@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -94,6 +95,175 @@ func checkOpenHours(plan domain.Itinerary, pois map[string]domain.POI) []domain.
 		}
 	}
 
+	return violations
+}
+
+func checkC3(plan domain.Itinerary, pois map[string]domain.POI, routes domain.RouteProvider) []domain.Violation {
+	if routes == nil {
+		return nil
+	}
+
+	violations := make([]domain.Violation, 0)
+	ctx := context.Background()
+
+	for dayIndex, day := range plan.Days {
+		var previous *domain.Block
+		var transit *domain.Transport
+
+		for blockIndex := range day.Blocks {
+			block := &day.Blocks[blockIndex]
+			if block.Type == domain.BlockTypeTransit {
+				transit = block.Transport
+				continue
+			}
+			if block.Type != domain.BlockTypePOI && block.Type != domain.BlockTypeMeal {
+				continue
+			}
+
+			if previous != nil {
+				previousPOI, previousFound := pois[previous.POIID]
+				currentPOI, currentFound := pois[block.POIID]
+				previousEnd, previousErr := domain.ParseClock(previous.End)
+				currentStart, currentErr := domain.ParseClock(block.Start)
+
+				if previousFound && currentFound && previousErr == nil && currentErr == nil {
+					gap := currentStart - previousEnd
+					if gap < 0 {
+						gap += domain.MinutesPerDay
+					}
+
+					mode := domain.TransportTransit
+					if transit != nil && transit.Mode != "" {
+						mode = transit.Mode
+					}
+					transport, err := routes.Route(ctx, previousPOI, currentPOI, mode)
+					if err != nil {
+						violations = append(violations, domain.Violation{
+							Code:       "C3",
+							Level:      domain.LevelWarning,
+							Day:        dayIndex + 1,
+							BlockID:    block.ID,
+							POIID:      block.POIID,
+							Message:    fmt.Sprintf("%s 到 %s 无法获取路程，未校验间隔", displayName(previousPOI), displayName(currentPOI)),
+							Suggestion: "稍后重试或改为直线距离估算",
+						})
+					} else {
+						if transport.Estimated {
+							violations = append(violations, domain.Violation{
+								Code:       "C3",
+								Level:      domain.LevelWarning,
+								Day:        dayIndex + 1,
+								BlockID:    block.ID,
+								POIID:      block.POIID,
+								Message:    fmt.Sprintf("%s 到 %s 的路程为估算值，请预留时间", displayName(previousPOI), displayName(currentPOI)),
+								Suggestion: "出发前确认实际路程",
+							})
+						}
+
+						required := transport.DurationMin + domain.BufferMinutes(previousPOI, currentPOI)
+						if required < 0 {
+							required = 0
+						}
+						if gap < required {
+							violations = append(violations, domain.Violation{
+								Code:    "C3",
+								Level:   domain.LevelBlocking,
+								Day:     dayIndex + 1,
+								BlockID: block.ID,
+								POIID:   block.POIID,
+								Message: fmt.Sprintf("%s 到 %s 间隔 %d 分钟，少于路程加缓冲 %d 分钟",
+									displayName(previousPOI), displayName(currentPOI), gap, required),
+								Suggestion: "增加交通时间或调整点位顺序",
+							})
+						}
+					}
+				}
+			}
+
+			previous = block
+			transit = nil
+		}
+	}
+
+	return violations
+}
+
+func checkC4(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.Violation {
+	maxMinutes := constraints.Daily.MaxHours * 60
+	if maxMinutes <= 0 {
+		return nil
+	}
+
+	violations := make([]domain.Violation, 0)
+	for dayIndex, day := range plan.Days {
+		start, startErr := domain.ParseClock(day.StartTime)
+		end, endErr := domain.ParseClock(day.EndTime)
+		if startErr != nil || endErr != nil {
+			continue
+		}
+
+		duration := end - start
+		if duration < 0 {
+			duration += domain.MinutesPerDay
+		}
+		if duration > maxMinutes {
+			violations = append(violations, domain.Violation{
+				Code:       "C4",
+				Level:      domain.LevelBlocking,
+				Day:        dayIndex + 1,
+				Message:    fmt.Sprintf("第 %d 天总时长 %d 分钟，超过上限 %d 分钟", dayIndex+1, duration, maxMinutes),
+				Suggestion: "减少点位或放宽每日时长",
+			})
+		}
+	}
+	return violations
+}
+
+func checkC10(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.Violation {
+	allowedStart, startErr := domain.ParseClock(constraints.Daily.StartTime)
+	allowedEnd, endErr := domain.ParseClock(constraints.Daily.EndTime)
+	if startErr != nil || endErr != nil {
+		return nil
+	}
+
+	violations := make([]domain.Violation, 0)
+	for dayIndex, day := range plan.Days {
+		for _, block := range day.Blocks {
+			start, err := domain.ParseClock(block.Start)
+			if err != nil {
+				continue
+			}
+			end, err := domain.ParseClock(block.End)
+			if err != nil {
+				continue
+			}
+
+			if start < allowedStart {
+				violations = append(violations, domain.Violation{
+					Code:       "C10",
+					Level:      domain.LevelBlocking,
+					Day:        dayIndex + 1,
+					BlockID:    block.ID,
+					POIID:      block.POIID,
+					Message:    fmt.Sprintf("%s 安排在 %s，早于每日开始时间 %s", block.Title, block.Start, constraints.Daily.StartTime),
+					Suggestion: "调整时间或放宽每日起止时间",
+				})
+				break
+			}
+			if end > allowedEnd {
+				violations = append(violations, domain.Violation{
+					Code:       "C10",
+					Level:      domain.LevelBlocking,
+					Day:        dayIndex + 1,
+					BlockID:    block.ID,
+					POIID:      block.POIID,
+					Message:    fmt.Sprintf("%s 结束于 %s，晚于每日结束时间 %s", block.Title, block.End, constraints.Daily.EndTime),
+					Suggestion: "调整时间或放宽每日起止时间",
+				})
+				break
+			}
+		}
+	}
 	return violations
 }
 

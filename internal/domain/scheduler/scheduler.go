@@ -9,8 +9,6 @@ import (
 )
 
 const (
-	sameAreaBufferMin    = 10
-	crossAreaBufferMin   = 20
 	walkModeMaxMeters    = 1500
 	estimatedTransitYuan = 2
 	earthRadiusMeters    = 6371000
@@ -70,7 +68,7 @@ func (s *Scheduler) Build(
 				}
 				normalizeTransport(&transport, previousPOI, poi, mode)
 
-				buffer := bufferMinutes(previousPOI, poi)
+				buffer := domain.BufferMinutes(previousPOI, poi)
 				transitMinutes := transport.DurationMin + buffer
 				blocks = append(blocks, domain.Block{
 					ID:          nextBlockID(),
@@ -170,13 +168,6 @@ func displayName(poi domain.POI) string {
 		return poi.Name
 	}
 	return poi.ID
-}
-
-func bufferMinutes(from, to domain.POI) int {
-	if from.Area != "" && from.Area == to.Area {
-		return sameAreaBufferMin
-	}
-	return crossAreaBufferMin
 }
 
 func normalizeTransport(transport *domain.Transport, from, to domain.POI, mode string) {
