@@ -12,6 +12,7 @@ import { parseItinerary } from "@/features/itinerary/types";
 import { RunTrace } from "@/features/trace/RunTrace";
 import { ItineraryTimeline } from "@/features/timeline/ItineraryTimeline";
 import { TripMap } from "@/features/map/TripMap";
+import { BudgetPanel } from "@/features/budget/BudgetPanel";
 import { stageLabels } from "@/features/trace/traceReducer";
 
 const terminalStatuses = new Set(["awaiting_user", "completed", "failed", "cancelled"]);
@@ -136,24 +137,7 @@ export function WorkspacePage() {
               <CardDescription>门票、餐饮、交通与总计。</CardDescription>
             </CardHeader>
             <CardContent>
-              {itinerary ? (
-                <dl className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <dt className="text-muted-foreground">总计</dt>
-                    <dd className="font-semibold">¥{itinerary.totals.cost_yuan}</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-muted-foreground">景点</dt>
-                    <dd>{itinerary.totals.poi_count} 个</dd>
-                  </div>
-                  <div className="flex justify-between">
-                    <dt className="text-muted-foreground">步行</dt>
-                    <dd>{itinerary.totals.walking_km.toFixed(1)} km</dd>
-                  </div>
-                </dl>
-              ) : (
-                <p className="text-sm text-muted-foreground">暂无预算。</p>
-              )}
+              <BudgetPanel itinerary={itinerary} />
             </CardContent>
           </Card>
           <Card>
