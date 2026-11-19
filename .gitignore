@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+bin/
+/api
+coverage.out
+web/node_modules/
+web/dist/
