@@ -177,6 +177,108 @@ func TestC4(t *testing.T) {
 	})
 }
 
+func TestC5(t *testing.T) {
+	tests := []struct {
+		name      string
+		budget    domain.BudgetConstraint
+		cost      int
+		wantLevel domain.Level
+	}{
+		{name: "under soft budget", budget: domain.BudgetConstraint{TotalYuan: 500}, cost: 400},
+		{name: "over soft budget warns", budget: domain.BudgetConstraint{TotalYuan: 500}, cost: 600, wantLevel: domain.LevelWarning},
+		{name: "over hard budget blocks", budget: domain.BudgetConstraint{TotalYuan: 500, Hard: true}, cost: 600, wantLevel: domain.LevelBlocking},
+		{name: "equal to budget", budget: domain.BudgetConstraint{TotalYuan: 500, Hard: true}, cost: 500},
+		{name: "no budget set", cost: 600},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, pois := singleBlockPlan("09:00", "10:00")
+			plan.Totals.CostYuan = tt.cost
+			constraints := domain.ConstraintSet{Budget: tt.budget}
+			c5 := violationsByCode(Validate(plan, constraints, pois, nil), "C5")
+
+			if tt.wantLevel == "" {
+				if len(c5) != 0 {
+					t.Fatalf("C5 violations = %+v, want none", c5)
+				}
+				return
+			}
+			if len(c5) != 1 {
+				t.Fatalf("C5 violations = %+v, want 1", c5)
+			}
+			if c5[0].Code != "C5" || c5[0].Level != tt.wantLevel {
+				t.Fatalf("violation = %s/%s, want C5/%s", c5[0].Code, c5[0].Level, tt.wantLevel)
+			}
+			if c5[0].Day != 0 {
+				t.Fatalf("C5 day = %d, want trip-level 0", c5[0].Day)
+			}
+		})
+	}
+}
+
+func TestC6(t *testing.T) {
+	enabled := domain.MealConstraint{Enabled: true}
+
+	t.Run("no meal blocks", func(t *testing.T) {
+		plan, pois := singleBlockPlan("09:00", "10:00")
+		constraints := domain.ConstraintSet{Meals: enabled}
+		c6 := violationsByCode(Validate(plan, constraints, pois, nil), "C6")
+		if len(c6) != 1 {
+			t.Fatalf("C6 violations = %+v, want 1", c6)
+		}
+		assertViolation(t, c6[0], "C6", domain.LevelBlocking)
+	})
+
+	t.Run("meals disabled", func(t *testing.T) {
+		plan, pois := singleBlockPlan("09:00", "10:00")
+		if c6 := violationsByCode(Validate(plan, domain.ConstraintSet{}, pois, nil), "C6"); len(c6) != 0 {
+			t.Fatalf("C6 violations = %+v, want none", c6)
+		}
+	})
+
+	tests := []struct {
+		name      string
+		start     string
+		end       string
+		wantLevel domain.Level
+	}{
+		{name: "lunch inside window", start: "12:00", end: "13:00"},
+		{name: "dinner inside window", start: "18:00", end: "19:00"},
+		{name: "slightly outside window", start: "14:00", end: "15:00"},
+		{name: "far outside window", start: "15:00", end: "16:00", wantLevel: domain.LevelWarning},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := mealPlan(tt.start, tt.end)
+			constraints := domain.ConstraintSet{Meals: enabled}
+			c6 := violationsByCode(Validate(plan, constraints, nil, nil), "C6")
+
+			if tt.wantLevel == "" {
+				if len(c6) != 0 {
+					t.Fatalf("C6 violations = %+v, want none", c6)
+				}
+				return
+			}
+			if len(c6) != 1 {
+				t.Fatalf("C6 violations = %+v, want 1", c6)
+			}
+			assertViolation(t, c6[0], "C6", tt.wantLevel)
+		})
+	}
+
+	t.Run("invalid meal time", func(t *testing.T) {
+		plan := mealPlan("晚点", "19:00")
+		constraints := domain.ConstraintSet{Meals: enabled}
+		c6 := violationsByCode(Validate(plan, constraints, nil, nil), "C6")
+		if len(c6) != 1 {
+			t.Fatalf("C6 violations = %+v, want 1", c6)
+		}
+		assertViolation(t, c6[0], "C6", domain.LevelWarning)
+	})
+}
+
 func TestC10(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -242,6 +344,22 @@ func singleBlockPlan(start, end string) (domain.Itinerary, map[string]domain.POI
 		}},
 	}
 	return plan, map[string]domain.POI{poi.ID: poi}
+}
+
+func mealPlan(start, end string) domain.Itinerary {
+	return domain.Itinerary{
+		City: "beijing",
+		Days: []domain.DayPlan{{
+			Date:      "2026-11-16",
+			StartTime: start,
+			EndTime:   end,
+			Blocks: []domain.Block{{
+				ID: "m1", Type: domain.BlockTypeMeal, Title: "午餐",
+				Start: start, End: end, DurationMin: 60, CostYuan: 50,
+			}},
+		}},
+		Totals: domain.Totals{CostYuan: 50},
+	}
 }
 
 func openAllDayPOI(id, name, area string) domain.POI {

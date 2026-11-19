@@ -219,6 +219,108 @@ func checkC4(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.V
 	return violations
 }
 
+func checkC5(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.Violation {
+	if constraints.Budget.TotalYuan <= 0 || plan.Totals.CostYuan <= constraints.Budget.TotalYuan {
+		return nil
+	}
+
+	level := domain.LevelWarning
+	if constraints.Budget.Hard {
+		level = domain.LevelBlocking
+	}
+	return []domain.Violation{{
+		Code:       "C5",
+		Level:      level,
+		Message:    fmt.Sprintf("预算 %d 元，预计 %d 元，超出 %d 元", constraints.Budget.TotalYuan, plan.Totals.CostYuan, plan.Totals.CostYuan-constraints.Budget.TotalYuan),
+		Suggestion: "减少点位、换免费景点或放宽预算",
+	}}
+}
+
+func checkC6(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.Violation {
+	if !constraints.Meals.Enabled {
+		return nil
+	}
+
+	lunchStart, lunchStartErr := domain.ParseClock(constraints.Meals.LunchWindow[0])
+	lunchEnd, lunchEndErr := domain.ParseClock(constraints.Meals.LunchWindow[1])
+	dinnerStart, dinnerStartErr := domain.ParseClock(constraints.Meals.DinnerWindow[0])
+	dinnerEnd, dinnerEndErr := domain.ParseClock(constraints.Meals.DinnerWindow[1])
+	if lunchStartErr != nil || lunchEndErr != nil || dinnerStartErr != nil || dinnerEndErr != nil {
+		return nil
+	}
+
+	violations := make([]domain.Violation, 0)
+	for dayIndex, day := range plan.Days {
+		mealSeen := false
+		for _, block := range day.Blocks {
+			if block.Type != domain.BlockTypeMeal {
+				continue
+			}
+			mealSeen = true
+
+			start, err := domain.ParseClock(block.Start)
+			if err != nil {
+				violations = append(violations, domain.Violation{
+					Code:       "C6",
+					Level:      domain.LevelWarning,
+					Day:        dayIndex + 1,
+					BlockID:    block.ID,
+					POIID:      block.POIID,
+					Message:    fmt.Sprintf("%s 的时间格式无效", block.Title),
+					Suggestion: "使用 HH:MM 24 小时格式",
+				})
+				continue
+			}
+			if mealOutsideWindow(start, lunchStart, lunchEnd, dinnerStart, dinnerEnd) {
+				violations = append(violations, domain.Violation{
+					Code:       "C6",
+					Level:      domain.LevelWarning,
+					Day:        dayIndex + 1,
+					BlockID:    block.ID,
+					POIID:      block.POIID,
+					Message:    fmt.Sprintf("%s 安排在 %s，超出用餐窗口", block.Title, block.Start),
+					Suggestion: "调整到午餐或晚餐时间窗内",
+				})
+			}
+		}
+
+		if !mealSeen {
+			violations = append(violations, domain.Violation{
+				Code:       "C6",
+				Level:      domain.LevelBlocking,
+				Day:        dayIndex + 1,
+				Message:    fmt.Sprintf("第 %d 天没有餐饮安排", dayIndex+1),
+				Suggestion: "至少安排午餐或晚餐",
+			})
+		}
+	}
+	return violations
+}
+
+func mealOutsideWindow(start, lunchStart, lunchEnd, dinnerStart, dinnerEnd int) bool {
+	if start >= lunchStart && start <= lunchEnd {
+		return false
+	}
+	if start >= dinnerStart && start <= dinnerEnd {
+		return false
+	}
+
+	nearest := absInt(start - lunchStart)
+	for _, boundary := range []int{lunchEnd, dinnerStart, dinnerEnd} {
+		if distance := absInt(start - boundary); distance < nearest {
+			nearest = distance
+		}
+	}
+	return nearest > 30
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
 func checkC10(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.Violation {
 	allowedStart, startErr := domain.ParseClock(constraints.Daily.StartTime)
 	allowedEnd, endErr := domain.ParseClock(constraints.Daily.EndTime)
