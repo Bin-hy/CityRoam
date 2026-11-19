@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: TripPilot API
   version: 0.1.0
-  description: Multi-constraint trip planning API.
+  description: Multi-constraint Beijing trip planning API with an asynchronous agent pipeline.
   license:
     name: MIT
     identifier: MIT
@@ -20,6 +20,44 @@ servers:
 security: []
 
 paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /readyz:
+    get:
+      operationId: getReadiness
+      summary: Readiness probe
+      responses:
+        "200":
+          description: Dependencies are ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          $ref: "#/components/responses/Error"
+
+  /api/meta:
+    get:
+      operationId: getMeta
+      summary: Cities, defaults and rate limit
+      responses:
+        "200":
+          description: Service metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Meta"
+
   /api/trips:
     post:
       operationId: createTrip
@@ -36,29 +74,235 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RunSummary"
+                $ref: "#/components/schemas/CreatedTrip"
         "400":
           $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
 
-  /api/runs/{id}/events:
+  /api/trips/{tripID}:
+    parameters:
+      - $ref: "#/components/parameters/TripID"
+    get:
+      operationId: getTrip
+      summary: Get the trip summary and latest artifacts
+      responses:
+        "200":
+          description: Trip summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trip"
+        "404":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteTrip
+      summary: Soft-delete a trip
+      responses:
+        "204":
+          description: Trip deleted
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /api/trips/{tripID}/versions:
+    parameters:
+      - $ref: "#/components/parameters/TripID"
+    get:
+      operationId: listPlanVersions
+      summary: List plan versions, newest first
+      responses:
+        "200":
+          description: Plan versions
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - versions
+                properties:
+                  versions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PlanVersion"
+
+  /api/trips/{tripID}/versions/{seq}:
+    parameters:
+      - $ref: "#/components/parameters/TripID"
+      - name: seq
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      operationId: getPlanVersion
+      summary: Get one plan version by sequence
+      responses:
+        "200":
+          description: Plan version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanVersion"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /api/trips/{tripID}/diff:
+    parameters:
+      - $ref: "#/components/parameters/TripID"
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      operationId: diffPlanVersions
+      summary: Compare two plan versions, defaulting to the latest two
+      responses:
+        "200":
+          description: Version diff
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionDiff"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /api/trips/{tripID}/adjustments:
+    parameters:
+      - $ref: "#/components/parameters/TripID"
+    post:
+      operationId: createAdjustment
+      summary: Start a scoped adjustment run from a base version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdjustmentRequest"
+      responses:
+        "202":
+          description: Adjustment run accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+
+  /api/trips/{tripID}/share:
+    parameters:
+      - $ref: "#/components/parameters/TripID"
+    post:
+      operationId: createShare
+      summary: Share the latest accepted version
+      responses:
+        "201":
+          description: Share link created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Share"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+
+  /api/runs/{runID}/resume:
+    parameters:
+      - $ref: "#/components/parameters/RunID"
+    post:
+      operationId: resumeRun
+      summary: Provide constraints, accept or reject an awaiting run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResumeRequest"
+      responses:
+        "202":
+          description: Action applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunAction"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+
+  /api/runs/{runID}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/RunID"
+    post:
+      operationId: cancelRun
+      summary: Cancel a run; terminal runs are unchanged
+      responses:
+        "202":
+          description: Cancellation accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunAction"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /api/runs/{runID}/events:
+    parameters:
+      - $ref: "#/components/parameters/RunID"
+      - name: Last-Event-ID
+        in: header
+        required: false
+        description: Last sequence received, used for replay
+        schema:
+          type: integer
+          minimum: 0
+      - name: after
+        in: query
+        required: false
+        description: Alternative cursor when the header cannot be set
+        schema:
+          type: integer
+          minimum: 0
     get:
       operationId: streamRunEvents
       summary: Stream run events over SSE
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
       responses:
         "200":
-          description: Server-sent event stream
+          description: Server-sent events with heartbeats every two seconds
           content:
             text/event-stream:
               schema:
                 type: string
+        "400":
+          $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+        "503":
           $ref: "#/components/responses/Error"
 
   /api/share/{slug}:
@@ -77,12 +321,151 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/SharedTrip"
         "404":
           $ref: "#/components/responses/Error"
 
+  /api/eval/cases:
+    get:
+      operationId: listEvalCases
+      summary: List evaluation cases
+      parameters:
+        - $ref: "#/components/parameters/AdminToken"
+      responses:
+        "200":
+          description: Evaluation cases
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - cases
+                properties:
+                  cases:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EvalCase"
+        "401":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+
+  /api/eval/runs:
+    get:
+      operationId: listEvalRuns
+      summary: List evaluation results
+      parameters:
+        - $ref: "#/components/parameters/AdminToken"
+      responses:
+        "200":
+          description: Evaluation results
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - runs
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EvalRun"
+        "401":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: startEval
+      summary: Start a full evaluation batch
+      parameters:
+        - $ref: "#/components/parameters/AdminToken"
+      responses:
+        "202":
+          description: Batch started
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    const: started
+        "401":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+
 components:
+  parameters:
+    TripID:
+      name: tripID
+      in: path
+      required: true
+      schema:
+        type: string
+    RunID:
+      name: runID
+      in: path
+      required: true
+      schema:
+        type: string
+    AdminToken:
+      name: X-Admin-Token
+      in: header
+      required: true
+      description: The Authorization bearer header is also accepted
+      schema:
+        type: string
+
   schemas:
+    Health:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+
+    Meta:
+      type: object
+      required:
+        - version
+        - cities
+        - defaults
+        - rate_limit
+      properties:
+        version:
+          type: string
+        cities:
+          type: array
+          items:
+            type: string
+        defaults:
+          type: object
+          required:
+            - days
+            - pace
+            - currency
+            - max_trip_days
+          properties:
+            days:
+              type: integer
+            pace:
+              type: string
+            currency:
+              type: string
+            max_trip_days:
+              type: integer
+        rate_limit:
+          type: object
+          required:
+            - per_hour
+          properties:
+            per_hour:
+              type: integer
+
     CreateTripRequest:
       type: object
       required:
@@ -91,27 +474,82 @@ components:
         input:
           type: string
           minLength: 1
-          maxLength: 500
+          maxLength: 2000
         city:
           type: string
-          example: beijing
+          enum:
+            - beijing
         client_request_id:
           type: string
 
-    RunSummary:
+    CreatedTrip:
       type: object
       required:
         - trip_id
         - run_id
-        - status
         - events_url
       properties:
         trip_id:
           type: string
-          format: uuid
         run_id:
           type: string
-          format: uuid
+        events_url:
+          type: string
+
+    Trip:
+      type: object
+      required:
+        - id
+        - city
+        - days
+        - status
+        - constraints
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        city:
+          type: string
+        days:
+          type: integer
+        budget_yuan:
+          type:
+            - integer
+            - "null"
+        status:
+          type: string
+        constraints:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        latest_run:
+          $ref: "#/components/schemas/RunSummary"
+        latest_version:
+          $ref: "#/components/schemas/PlanVersion"
+
+    RunSummary:
+      type: object
+      required:
+        - id
+        - mode
+        - status
+        - stage
+        - round
+        - created_at
+      properties:
+        id:
+          type: string
+        mode:
+          type: string
+          enum:
+            - initial
+            - adjustment
         status:
           type: string
           enum:
@@ -121,8 +559,228 @@ components:
             - completed
             - failed
             - cancelled
+        stage:
+          type: string
+        round:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        error_code:
+          type: string
+
+    PlanVersion:
+      type: object
+      required:
+        - id
+        - trip_id
+        - run_id
+        - seq
+        - plan
+        - constraints
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+        trip_id:
+          type: string
+        run_id:
+          type: string
+        seq:
+          type: integer
+        plan:
+          type: object
+          additionalProperties: true
+        constraints:
+          type: object
+          additionalProperties: true
+        violations:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        diff_summary:
+          type: object
+          additionalProperties: true
+        reason:
+          type:
+            - string
+            - "null"
+        status:
+          type: string
+          enum:
+            - draft
+            - accepted
+            - superseded
+        created_at:
+          type: string
+          format: date-time
+
+    VersionDiff:
+      type: object
+      required:
+        - from
+        - to
+        - diff
+      properties:
+        from:
+          type: integer
+        to:
+          type: integer
+        diff:
+          type: object
+          additionalProperties: true
+
+    AdjustmentRequest:
+      type: object
+      required:
+        - input
+        - base_version
+      properties:
+        input:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        base_version:
+          type: integer
+          minimum: 1
+        client_request_id:
+          type: string
+
+    RunAccepted:
+      type: object
+      required:
+        - run_id
+        - events_url
+      properties:
+        run_id:
+          type: string
         events_url:
           type: string
+
+    ResumeRequest:
+      type: object
+      required:
+        - action
+      properties:
+        action:
+          type: string
+          enum:
+            - provide_constraints
+            - accept
+            - reject
+        input:
+          type: string
+        constraints:
+          type: object
+          additionalProperties: true
+
+    RunAction:
+      type: object
+      required:
+        - run_id
+        - status
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
+
+    Share:
+      type: object
+      required:
+        - slug
+        - url
+        - trip_id
+        - version_seq
+        - created_at
+      properties:
+        slug:
+          type: string
+        url:
+          type: string
+        trip_id:
+          type: string
+        version_seq:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    SharedTrip:
+      type: object
+      required:
+        - slug
+        - trip_id
+        - created_at
+        - version
+      properties:
+        slug:
+          type: string
+        trip_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        version:
+          $ref: "#/components/schemas/PlanVersion"
+
+    EvalCase:
+      type: object
+      required:
+        - id
+        - input
+        - expected
+        - tags
+        - enabled
+      properties:
+        id:
+          type: string
+        input:
+          type: string
+        expected:
+          type: object
+          additionalProperties: true
+        tags:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+
+    EvalRun:
+      type: object
+      required:
+        - id
+        - case_id
+        - metrics
+        - passed
+        - created_at
+      properties:
+        id:
+          type: string
+        case_id:
+          type: string
+        run_id:
+          type:
+            - string
+            - "null"
+        metrics:
+          type: object
+          additionalProperties: true
+        passed:
+          type: boolean
+        duration_ms:
+          type:
+            - integer
+            - "null"
+        created_at:
+          type: string
+          format: date-time
 
     Error:
       type: object
@@ -134,6 +792,7 @@ components:
           required:
             - code
             - message
+            - request_id
           properties:
             code:
               type: string
