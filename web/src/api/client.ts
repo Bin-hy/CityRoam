@@ -27,7 +27,7 @@ interface ErrorEnvelope {
   };
 }
 
-const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
 export async function apiRequest<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
