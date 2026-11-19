@@ -114,3 +114,14 @@ func clockMinutes(value string) (int, bool) {
 	minutes, err := ParseClock(value)
 	return minutes, err == nil
 }
+
+// POIQuery is the candidate search contract shared by the snapshot, AMap and
+// future MCP sources.
+type POIQuery struct {
+	City       string   `json:"city"`
+	Keywords   []string `json:"keywords,omitempty"`
+	Categories []string `json:"categories,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	MustVisit  []string `json:"must_visit,omitempty"`
+	Limit      int      `json:"limit,omitempty"`
+}

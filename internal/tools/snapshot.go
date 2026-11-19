@@ -96,6 +96,17 @@ func (s *Snapshot) Search(query SearchQuery) []domain.POI {
 	return included
 }
 
+// SearchCandidates adapts the snapshot to the agent's CandidateSource.
+func (s *Snapshot) SearchCandidates(_ context.Context, query domain.POIQuery) ([]domain.POI, error) {
+	return s.Search(SearchQuery{
+		City:       query.City,
+		Categories: query.Categories,
+		Tags:       query.Tags,
+		MustVisit:  query.MustVisit,
+		Limit:      query.Limit,
+	}), nil
+}
+
 func (s *Snapshot) Get(id string) (domain.POI, bool) {
 	for _, poi := range s.pois {
 		if poi.ID == id {
