@@ -1,0 +1,151 @@
+openapi: 3.1.0
+info:
+  title: TripPilot API
+  version: 0.1.0
+  description: Multi-constraint trip planning API.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: "{protocol}://{host}"
+    description: TripPilot API
+    variables:
+      protocol:
+        default: http
+        enum:
+          - http
+          - https
+      host:
+        default: localhost:8080
+security: []
+
+paths:
+  /api/trips:
+    post:
+      operationId: createTrip
+      summary: Create a trip and start planning
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTripRequest"
+      responses:
+        "202":
+          description: Planning run accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunSummary"
+        "400":
+          $ref: "#/components/responses/Error"
+
+  /api/runs/{id}/events:
+    get:
+      operationId: streamRunEvents
+      summary: Stream run events over SSE
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Server-sent event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /api/share/{slug}:
+    get:
+      operationId: getSharedTrip
+      summary: Get a read-only shared trip
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Shared trip
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          $ref: "#/components/responses/Error"
+
+components:
+  schemas:
+    CreateTripRequest:
+      type: object
+      required:
+        - input
+      properties:
+        input:
+          type: string
+          minLength: 1
+          maxLength: 500
+        city:
+          type: string
+          example: beijing
+        client_request_id:
+          type: string
+
+    RunSummary:
+      type: object
+      required:
+        - trip_id
+        - run_id
+        - status
+        - events_url
+      properties:
+        trip_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - queued
+            - running
+            - awaiting_user
+            - completed
+            - failed
+            - cancelled
+        events_url:
+          type: string
+
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            request_id:
+              type: string
+
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
