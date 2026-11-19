@@ -28,9 +28,28 @@ type Graph struct {
 	runnable compose.Runnable[*TripState, *TripState]
 }
 
-func NewGraph(ctx context.Context, nodes *Nodes) (*Graph, error) {
+// GraphOption customizes graph wiring.
+type GraphOption func(*graphOptions)
+
+type graphOptions struct {
+	stageHook StageHook
+}
+
+// StageHook runs after every stage with the updated state, which lets the
+// Runner persist runs.state between stages.
+type StageHook func(ctx context.Context, stage string, state *TripState) error
+
+func WithStageHook(hook StageHook) GraphOption {
+	return func(options *graphOptions) { options.stageHook = hook }
+}
+
+func NewGraph(ctx context.Context, nodes *Nodes, opts ...GraphOption) (*Graph, error) {
 	if nodes == nil {
 		return nil, fmt.Errorf("agent: graph requires nodes")
+	}
+	options := graphOptions{}
+	for _, opt := range opts {
+		opt(&options)
 	}
 
 	g := compose.NewGraph[*TripState, *TripState]()
@@ -49,8 +68,24 @@ func NewGraph(ctx context.Context, nodes *Nodes) (*Graph, error) {
 		{nodePresent, graph.present},
 	}
 	for _, stage := range stages {
-		if err := g.AddLambdaNode(stage.key, compose.InvokableLambda(stage.fn)); err != nil {
-			return nil, fmt.Errorf("agent: add %s node: %w", stage.key, err)
+		key := stage.key
+		fn := stage.fn
+		if options.stageHook != nil {
+			hook := options.stageHook
+			fn = func(ctx context.Context, state *TripState) (*TripState, error) {
+				out, err := stage.fn(ctx, state)
+				if err != nil {
+					return nil, err
+				}
+				out.Stage = key
+				if err := hook(ctx, key, out); err != nil {
+					return nil, err
+				}
+				return out, nil
+			}
+		}
+		if err := g.AddLambdaNode(key, compose.InvokableLambda(fn)); err != nil {
+			return nil, fmt.Errorf("agent: add %s node: %w", key, err)
 		}
 	}
 

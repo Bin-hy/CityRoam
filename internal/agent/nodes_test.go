@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -41,11 +42,14 @@ type recordedEvent struct {
 }
 
 type eventRecorder struct {
+	mu     sync.Mutex
 	events []recordedEvent
 	err    error
 }
 
 func (r *eventRecorder) Publish(ctx context.Context, runID string, typ string, payload any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.err != nil {
 		return r.err
 	}
@@ -54,6 +58,8 @@ func (r *eventRecorder) Publish(ctx context.Context, runID string, typ string, p
 }
 
 func (r *eventRecorder) types() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	out := make([]string, len(r.events))
 	for i, event := range r.events {
 		out[i] = event.typ

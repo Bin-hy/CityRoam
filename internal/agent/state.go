@@ -7,8 +7,11 @@ import (
 )
 
 const (
-	StatusRunning  = "running"
-	StatusComplete = "completed"
+	StatusQueued    = "queued"
+	StatusRunning   = "running"
+	StatusCompleted = "completed"
+	StatusFailed    = "failed"
+	StatusCancelled = "cancelled"
 )
 
 // RunError is the JSON-safe form of a node failure stored in run state.
@@ -39,6 +42,7 @@ type TripState struct {
 	Snapshot       *VersionSnapshot     `json:"snapshot,omitempty"`
 	Previous       *domain.Itinerary    `json:"previous,omitempty"`
 	PreviousSeq    int                  `json:"previous_seq,omitempty"`
+	Stage          string               `json:"stage,omitempty"`
 	Status         string               `json:"status"`
 	Error          *RunError            `json:"error,omitempty"`
 }
