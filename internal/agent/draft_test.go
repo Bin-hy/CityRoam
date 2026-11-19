@@ -106,7 +106,7 @@ func TestDraftNode(t *testing.T) {
 		if len(llm.calls) != 2 {
 			t.Fatalf("calls = %d", len(llm.calls))
 		}
-		if !strings.Contains(llm.calls[1].prompt, "候选集之外") {
+		if !strings.Contains(llm.calls[1].prompt, "允许范围之外") {
 			t.Fatalf("retry prompt missing explanation:\n%s", llm.calls[1].prompt)
 		}
 		if out.Usage.TotalTokens != 100 || out.Usage.Attempts != 2 {

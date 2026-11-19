@@ -9,12 +9,13 @@ import (
 )
 
 type fakeScheduler struct {
-	plan domain.Itinerary
-	err  error
-	got  ScheduleInput
+	plan      domain.Itinerary
+	err       error
+	lastDraft domain.DraftPlan
 }
 
 func (f *fakeScheduler) Build(draft domain.DraftPlan, constraints domain.ConstraintSet, pois map[string]domain.POI, routes domain.RouteProvider) (domain.Itinerary, error) {
+	f.lastDraft = draft
 	if f.err != nil {
 		return domain.Itinerary{}, f.err
 	}

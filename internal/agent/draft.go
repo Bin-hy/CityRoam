@@ -120,32 +120,36 @@ func validateDraft(draft domain.DraftPlan, constraints domain.ConstraintSet, poi
 	if len(draft.Days) != constraints.Days {
 		issues = append(issues, fmt.Sprintf("需要恰好 %d 天，实际 %d 天", constraints.Days, len(draft.Days)))
 	}
-
 	for dayIndex, day := range draft.Days {
-		if len(day.Items) == 0 {
-			issues = append(issues, fmt.Sprintf("第 %d 天没有任何安排", dayIndex+1))
-			continue
+		issues = append(issues, validateDayItems(dayIndex, day.Items, constraints.Meals.Enabled, pois)...)
+	}
+	return issues
+}
+
+func validateDayItems(dayIndex int, items []domain.DraftItem, mealsEnabled bool, pois map[string]domain.POI) []string {
+	issues := make([]string, 0)
+	if len(items) == 0 {
+		return append(issues, fmt.Sprintf("第 %d 天没有任何安排", dayIndex+1))
+	}
+	meals := 0
+	for _, item := range items {
+		if _, found := pois[item.POIID]; !found {
+			issues = append(issues, fmt.Sprintf("第 %d 天使用了允许范围之外的 poi_id %q", dayIndex+1, item.POIID))
 		}
-		meals := 0
-		for _, item := range day.Items {
-			if _, found := pois[item.POIID]; !found {
-				issues = append(issues, fmt.Sprintf("第 %d 天使用了候选集之外的 poi_id %q", dayIndex+1, item.POIID))
-			}
-			switch item.Type {
-			case domain.ItemTypePOI:
-			case domain.ItemTypeMeal:
-				meals++
-			default:
-				issues = append(issues, fmt.Sprintf("第 %d 天的 %q type 必须是 poi 或 meal", dayIndex+1, item.POIID))
-			}
-			if item.DurationMin < minItemMinutes || item.DurationMin > maxItemMinutes {
-				issues = append(issues, fmt.Sprintf("第 %d 天的 %q duration_min 必须在 %d-%d 之间",
-					dayIndex+1, item.POIID, minItemMinutes, maxItemMinutes))
-			}
+		switch item.Type {
+		case domain.ItemTypePOI:
+		case domain.ItemTypeMeal:
+			meals++
+		default:
+			issues = append(issues, fmt.Sprintf("第 %d 天的 %q type 必须是 poi 或 meal", dayIndex+1, item.POIID))
 		}
-		if constraints.Meals.Enabled && meals == 0 {
-			issues = append(issues, fmt.Sprintf("第 %d 天缺少餐饮安排", dayIndex+1))
+		if item.DurationMin < minItemMinutes || item.DurationMin > maxItemMinutes {
+			issues = append(issues, fmt.Sprintf("第 %d 天的 %q duration_min 必须在 %d-%d 之间",
+				dayIndex+1, item.POIID, minItemMinutes, maxItemMinutes))
 		}
+	}
+	if mealsEnabled && meals == 0 {
+		issues = append(issues, fmt.Sprintf("第 %d 天缺少餐饮安排", dayIndex+1))
 	}
 	return issues
 }

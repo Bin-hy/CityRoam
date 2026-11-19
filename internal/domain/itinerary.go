@@ -116,3 +116,10 @@ func (i Itinerary) Clone() Itinerary {
 	}
 	return out
 }
+
+// DayPatch is the only repair/adjustment shape the LLM may produce.
+type DayPatch struct {
+	DayIndex int         `json:"day_index"`
+	Items    []DraftItem `json:"items"`
+	Reason   string      `json:"reason"`
+}
