@@ -71,6 +71,11 @@ type runControl struct {
 	once   sync.Once
 }
 
+type startRecord struct {
+	done chan struct{}
+	err  error
+}
+
 // Runner owns run lifecycle: it executes the graph asynchronously, tracks
 // cancellation and resumes awaiting runs from persisted TripState.
 type Runner struct {
@@ -83,6 +88,7 @@ type Runner struct {
 
 	mu       sync.Mutex
 	controls map[string]*runControl
+	requests map[string]*startRecord
 	wg       sync.WaitGroup
 }
 
@@ -106,6 +112,7 @@ func NewRunner(ctx context.Context, store RunStore, events EventPublisher, nodes
 		logger:   options.logger,
 		sem:      make(chan struct{}, options.concurrency),
 		controls: make(map[string]*runControl),
+		requests: make(map[string]*startRecord),
 	}
 	graph, err := NewGraph(ctx, nodes, WithStageHook(runner.saveStage))
 	if err != nil {
@@ -134,8 +141,8 @@ func (r *Runner) Start(ctx context.Context, runID string) error {
 	if err != nil {
 		return fmt.Errorf("runner: restore state: %w", err)
 	}
-	state.Status = StatusRunning
-	state.Stage = nodeAdmit
+	state.Status = StatusQueued
+	state.Stage = StatusQueued
 	if err := r.saveState(ctx, state); err != nil {
 		return err
 	}
@@ -144,9 +151,6 @@ func (r *Runner) Start(ctx context.Context, runID string) error {
 		"input": state.Input,
 	}); err != nil {
 		return fmt.Errorf("runner: publish run.started: %w", err)
-	}
-	if err := r.store.UpdateRunStatus(ctx, runID, StatusRunning, nodeAdmit); err != nil {
-		return fmt.Errorf("runner: mark running: %w", err)
 	}
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -159,6 +163,30 @@ func (r *Runner) Start(ctx context.Context, runID string) error {
 		r.execute(runCtx, state)
 	}()
 	return nil
+}
+
+// StartRequest deduplicates concurrent starts that share a request_id so one
+// request can never create two executions. Cross-process dedupe relies on the
+// unique runs.request_id index in storage.
+func (r *Runner) StartRequest(ctx context.Context, runID, requestID string) error {
+	if requestID == "" {
+		return r.Start(ctx, runID)
+	}
+
+	r.mu.Lock()
+	if record, exists := r.requests[requestID]; exists {
+		r.mu.Unlock()
+		<-record.done
+		return record.err
+	}
+	record := &startRecord{done: make(chan struct{})}
+	r.requests[requestID] = record
+	r.mu.Unlock()
+
+	err := r.Start(ctx, runID)
+	record.err = err
+	close(record.done)
+	return err
 }
 
 // Resume supplements missing constraints, accepts or rejects an awaiting plan.
@@ -207,7 +235,24 @@ func (r *Runner) Resume(ctx context.Context, runID string, action ResumeAction) 
 
 	case ResumeAccept:
 		if state.Snapshot == nil {
-			return fmt.Errorf("runner: run has no plan to accept")
+			if len(state.Plan.Days) == 0 {
+				return fmt.Errorf("runner: run has no plan to accept")
+			}
+			out, err := r.nodes.Present(ctx, PresentInput{
+				RunID:        runID,
+				Constraints:  state.Constraints,
+				Plan:         state.Plan,
+				Violations:   state.Violations,
+				Reason:       "adjustment",
+				Explanations: state.Draft.Explanations,
+				Suggestions:  state.Suggestions,
+				Previous:     state.Previous,
+				PreviousSeq:  state.PreviousSeq,
+			})
+			if err != nil {
+				return fmt.Errorf("runner: snapshot accepted plan: %w", err)
+			}
+			state.Snapshot = &out.Snapshot
 		}
 		state.Status = StatusCompleted
 		state.Stage = "accepted"
@@ -304,6 +349,24 @@ func (r *Runner) execute(ctx context.Context, state *TripState) {
 		r.markCancelled(ctx, state.RunID)
 		return
 	}
+	if ctx.Err() != nil {
+		r.markCancelled(ctx, state.RunID)
+		return
+	}
+
+	stage := nodeAdmit
+	if state.Mode == "adjustment" {
+		stage = "adjust"
+	}
+	if err := r.store.UpdateRunStatus(ctx, state.RunID, StatusRunning, stage); err != nil {
+		r.fail(ctx, state, fmt.Errorf("mark running: %w", err))
+		return
+	}
+
+	if state.Mode == "adjustment" {
+		r.executeAdjustment(ctx, state)
+		return
+	}
 
 	out, err := r.graph.Run(ctx, state)
 	if err != nil {
@@ -319,19 +382,74 @@ func (r *Runner) execute(ctx context.Context, state *TripState) {
 		return
 	}
 
-	stage := nodePresent
+	stage = nodePresent
 	if out.Snapshot == nil {
 		stage = nodeParse
+		if out.Proposal != nil {
+			stage = "proposal"
+		}
 	}
 	if err := r.store.UpdateRunStatus(ctx, out.RunID, out.Status, stage); err != nil {
 		r.logger.Error("runner: update awaiting status", "run_id", out.RunID, "error", err)
 	}
-	if err := r.events.Publish(ctx, out.RunID, "run.awaiting_user", map[string]any{
+	payload := map[string]any{
 		"missing": out.Missing,
 		"stage":   stage,
 		"seq":     snapshotSeq(out.Snapshot),
-	}); err != nil {
+	}
+	if out.Proposal != nil {
+		payload["proposal"] = out.Proposal
+	}
+	if err := r.events.Publish(ctx, out.RunID, "run.awaiting_user", payload); err != nil {
 		r.logger.Error("runner: publish awaiting", "run_id", out.RunID, "error", err)
+	}
+}
+
+// executeAdjustment runs one adjustment proposal and leaves the run awaiting
+// the user's accept/reject decision.
+func (r *Runner) executeAdjustment(ctx context.Context, state *TripState) {
+	if len(state.Plan.Days) == 0 || len(state.Draft.Days) == 0 {
+		r.fail(ctx, state, &NodeError{Code: "adjustment_base_missing", Message: "缺少可调整的行程版本"})
+		return
+	}
+	out, err := r.nodes.Adjust(ctx, AdjustInput{
+		RunID:          state.RunID,
+		Input:          state.Input,
+		Constraints:    state.Constraints,
+		BasePlan:       state.Plan,
+		BaseDraft:      state.Draft,
+		BaseViolations: state.Violations,
+		Candidates:     state.Candidates,
+		POIs:           poiMap(state.Candidates),
+		BaseVersion:    state.PreviousSeq,
+	})
+	if err != nil {
+		r.fail(ctx, state, err)
+		return
+	}
+
+	state.Plan = out.Plan
+	state.Draft = out.Draft
+	state.Violations = out.Violations
+	state.Candidates = out.Alternatives
+	state.Proposal = &out.Proposal
+	state.Suggestions = RelaxationSuggestions(out.Violations, state.Constraints)
+	state.StopReason = ""
+	state.Snapshot = nil
+	state.Status = StatusAwaitingUser
+	state.Stage = "proposal"
+	if err := r.saveState(ctx, state); err != nil {
+		r.fail(ctx, state, err)
+		return
+	}
+	if err := r.store.UpdateRunStatus(ctx, state.RunID, StatusAwaitingUser, "proposal"); err != nil {
+		r.logger.Error("runner: update proposal status", "run_id", state.RunID, "error", err)
+	}
+	if err := r.events.Publish(ctx, state.RunID, "run.awaiting_user", map[string]any{
+		"stage":    "proposal",
+		"proposal": out.Proposal,
+	}); err != nil {
+		r.logger.Error("runner: publish proposal", "run_id", state.RunID, "error", err)
 	}
 }
 

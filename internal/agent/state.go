@@ -20,6 +20,18 @@ type RunError struct {
 	Message string `json:"message"`
 }
 
+// AdjustmentProposal is the pending change an adjustment run asks the user
+// to accept or reject before a new version is written.
+type AdjustmentProposal struct {
+	BaseVersion int             `json:"base_version"`
+	Scope       string          `json:"scope"`
+	DayIndex    int             `json:"day_index"`
+	Patch       domain.DayPatch `json:"patch"`
+	Summary     string          `json:"summary"`
+	Impact      string          `json:"impact"`
+	Warnings    []string        `json:"warnings,omitempty"`
+}
+
 // TripState is the serializable payload that flows through the Eino graph and
 // is persisted after every stage so an awaiting run can resume from the DB.
 type TripState struct {
@@ -40,6 +52,7 @@ type TripState struct {
 	StopReason     string               `json:"stop_reason,omitempty"`
 	Suggestions    []string             `json:"suggestions,omitempty"`
 	Snapshot       *VersionSnapshot     `json:"snapshot,omitempty"`
+	Proposal       *AdjustmentProposal  `json:"proposal,omitempty"`
 	Previous       *domain.Itinerary    `json:"previous,omitempty"`
 	PreviousSeq    int                  `json:"previous_seq,omitempty"`
 	Stage          string               `json:"stage,omitempty"`

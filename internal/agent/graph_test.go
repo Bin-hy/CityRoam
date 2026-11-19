@@ -39,7 +39,7 @@ func graphRepairReply(poiID string) json.RawMessage {
 	return payload
 }
 
-func graphNodes(llm *fakeLLM, events *eventRecorder, validator Validator) *Nodes {
+func graphNodes(llm LLMClient, events *eventRecorder, validator Validator) *Nodes {
 	source := &fakeSource{fn: func(context.Context, domain.POIQuery) ([]domain.POI, error) {
 		return makePOIs("poi", 2), nil
 	}}

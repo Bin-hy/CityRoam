@@ -34,7 +34,14 @@ func TestPromptSchemas(t *testing.T) {
 				BasePlan:     json.RawMessage(`{"days":[]}`),
 				Scope:        "day",
 				AffectedDays: []int{1},
+				Alternatives: json.RawMessage(`[]`),
 			}, "第二天轻松一点"},
+			{"intent", AdjustIntentPromptData{
+				Input:       "第二天轻松一点",
+				Constraints: json.RawMessage(`{}`),
+				BasePlan:    json.RawMessage(`{"days":[]}`),
+				Days:        2,
+			}, "scope"},
 			{"explain", ExplainPromptData{
 				Constraints: json.RawMessage(`{}`),
 				Plan:        json.RawMessage(`{"days":[]}`),
@@ -77,6 +84,11 @@ func TestPromptSchemas(t *testing.T) {
 		assertValid(t, patch, `{"day_index":1,"items":[{"poi_id":"temple-of-heaven","type":"poi","duration_min":90}],"reason":"减少步行"}`)
 		assertInvalid(t, patch, `{"day_index":1,"items":[]}`)
 		assertInvalid(t, patch, `{"day_index":1,"items":[{"poi_id":"x","type":"poi","duration_min":90}]}`)
+
+		intent := compileSchema(t, AdjustmentIntentSchema)
+		assertValid(t, intent, `{"scope":"day","affected_days":[1],"summary":"轻松一点"}`)
+		assertInvalid(t, intent, `{"scope":"unknown"}`)
+		assertInvalid(t, intent, `{"scope":"day","affected_days":[4]}`)
 	})
 }
 

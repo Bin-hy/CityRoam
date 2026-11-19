@@ -141,4 +141,20 @@ var (
 	    "reason": {"type": "string", "minLength": 1}
 	  }
 	}`)
+
+	AdjustmentIntentSchema = json.RawMessage(`{
+	  "$schema": "https://json-schema.org/draft/2020-12/schema",
+	  "type": "object",
+	  "additionalProperties": false,
+	  "required": ["scope", "affected_days"],
+	  "properties": {
+	    "scope": {"type": "string", "enum": ["day", "block", "poi", "pace", "budget", "unknown"]},
+	    "affected_days": {
+	      "type": "array",
+	      "maxItems": 4,
+	      "items": {"type": "integer", "minimum": 0, "maximum": 3}
+	    },
+	    "summary": {"type": "string", "maxLength": 200}
+	  }
+	}`)
 )

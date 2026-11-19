@@ -1,0 +1,17 @@
+用户对已有行程提出调整：
+{{.Input}}
+
+当前约束（JSON）：
+{{json .Constraints}}
+
+当前行程（JSON）：
+{{json .BasePlan}}
+
+行程天数：{{.Days}}。
+
+判断这次调整的范围，输出 AdjustmentIntent JSON：
+- scope：day（整天）、block（一天里的某个安排）、poi（替换某个地点）、pace（节奏）、budget（预算）、unknown（无法识别）。
+- affected_days：0-based 的天序号。day/block/poi 必须明确指出；pace/budget 可以覆盖多天。
+- summary：一句话说明调整内容。
+无法判断调整对象时 scope 填 unknown、affected_days 留空，不要猜测。
+只输出一个 JSON 对象，不要输出解释或 Markdown。

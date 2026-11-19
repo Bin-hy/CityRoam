@@ -44,6 +44,15 @@ type AdjustPromptData struct {
 	BasePlan     json.RawMessage
 	Scope        string
 	AffectedDays []int
+	Alternatives json.RawMessage
+}
+
+// AdjustIntentPromptData feeds intent.tmpl.
+type AdjustIntentPromptData struct {
+	Input       string
+	Constraints json.RawMessage
+	BasePlan    json.RawMessage
+	Days        int
 }
 
 // ExplainPromptData feeds explain.tmpl.
