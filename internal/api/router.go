@@ -23,6 +23,8 @@ type Deps struct {
 	Now              func() time.Time
 	Ready            func(ctx context.Context) error
 	Broker           *events.Broker
+	Store            TripStore
+	Runner           RunStarter
 }
 
 // NewRouter builds the public API. Handlers are filled in per endpoint card;
@@ -50,15 +52,15 @@ func NewRouter(deps Deps) http.Handler {
 	router.Route("/api", func(api chi.Router) {
 		api.Group(func(public chi.Router) {
 			public.Use(RateLimit(deps.RateLimitPerHour, deps.Now))
-			public.Post("/trips", handleNotImplemented())
-			public.Delete("/trips/{tripID}", handleNotImplemented())
+			public.Post("/trips", handleCreateTrip(deps))
+			public.Delete("/trips/{tripID}", handleDeleteTrip(deps))
 			public.Post("/trips/{tripID}/adjustments", handleNotImplemented())
 			public.Post("/trips/{tripID}/share", handleNotImplemented())
 			public.Post("/runs/{runID}/resume", handleNotImplemented())
 			public.Post("/runs/{runID}/cancel", handleNotImplemented())
 		})
 
-		api.Get("/trips/{tripID}", handleNotImplemented())
+		api.Get("/trips/{tripID}", handleGetTrip(deps))
 		api.Get("/trips/{tripID}/versions", handleNotImplemented())
 		api.Get("/trips/{tripID}/versions/{seq}", handleNotImplemented())
 		api.Get("/trips/{tripID}/diff", handleNotImplemented())

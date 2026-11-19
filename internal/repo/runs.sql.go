@@ -120,6 +120,50 @@ func (q *Queries) GetRunByRequestID(ctx context.Context, requestID *string) (Run
 	return i, err
 }
 
+const listRunsByStatus = `-- name: ListRunsByStatus :many
+SELECT id, trip_id, mode, status, stage, round, input, constraints, base_version_id, state, proposal, error_code, error_message, request_id, started_at, finished_at, created_at FROM runs
+WHERE status = ANY($1::text[])
+ORDER BY created_at
+`
+
+func (q *Queries) ListRunsByStatus(ctx context.Context, dollar_1 []string) ([]Run, error) {
+	rows, err := q.db.Query(ctx, listRunsByStatus, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Run
+	for rows.Next() {
+		var i Run
+		if err := rows.Scan(
+			&i.ID,
+			&i.TripID,
+			&i.Mode,
+			&i.Status,
+			&i.Stage,
+			&i.Round,
+			&i.Input,
+			&i.Constraints,
+			&i.BaseVersionID,
+			&i.State,
+			&i.Proposal,
+			&i.ErrorCode,
+			&i.ErrorMessage,
+			&i.RequestID,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRunsByTrip = `-- name: ListRunsByTrip :many
 SELECT id, trip_id, mode, status, stage, round, input, constraints, base_version_id, state, proposal, error_code, error_message, request_id, started_at, finished_at, created_at FROM runs
 WHERE trip_id = $1
@@ -221,15 +265,17 @@ func (q *Queries) UpdateRunState(ctx context.Context, arg UpdateRunStateParams) 
 const updateRunStatus = `-- name: UpdateRunStatus :exec
 UPDATE runs
 SET status = $2,
-    error_code = $3,
-    error_message = $4,
-    finished_at = $5
+    stage = $3,
+    error_code = $4,
+    error_message = $5,
+    finished_at = $6
 WHERE id = $1
 `
 
 type UpdateRunStatusParams struct {
 	ID           string     `json:"id"`
 	Status       string     `json:"status"`
+	Stage        string     `json:"stage"`
 	ErrorCode    *string    `json:"error_code"`
 	ErrorMessage *string    `json:"error_message"`
 	FinishedAt   *time.Time `json:"finished_at"`
@@ -239,6 +285,7 @@ func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams
 	_, err := q.db.Exec(ctx, updateRunStatus,
 		arg.ID,
 		arg.Status,
+		arg.Stage,
 		arg.ErrorCode,
 		arg.ErrorMessage,
 		arg.FinishedAt,

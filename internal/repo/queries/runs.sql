@@ -9,6 +9,11 @@ SELECT * FROM runs WHERE id = $1;
 -- name: GetRunByRequestID :one
 SELECT * FROM runs WHERE request_id = $1;
 
+-- name: ListRunsByStatus :many
+SELECT * FROM runs
+WHERE status = ANY($1::text[])
+ORDER BY created_at;
+
 -- name: ListRunsByTrip :many
 SELECT * FROM runs
 WHERE trip_id = $1
@@ -30,9 +35,10 @@ WHERE id = $1;
 -- name: UpdateRunStatus :exec
 UPDATE runs
 SET status = $2,
-    error_code = $3,
-    error_message = $4,
-    finished_at = $5
+    stage = $3,
+    error_code = $4,
+    error_message = $5,
+    finished_at = $6
 WHERE id = $1;
 
 -- name: MarkRunStarted :exec

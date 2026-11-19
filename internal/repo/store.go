@@ -142,3 +142,64 @@ func (s *Store) AppendEvent(ctx context.Context, arg AppendEventParams) (RunEven
 func (s *Store) ListEventsAfter(ctx context.Context, runID string, afterSeq int32) ([]RunEvent, error) {
 	return s.q.ListEventsAfter(ctx, ListEventsAfterParams{RunID: runID, Seq: afterSeq})
 }
+
+// CreateTripAndRun creates the first run in the same transaction so a trip
+// never exists without its initial run. A repeated request id returns the
+// previously created pair instead of inserting again.
+func (s *Store) CreateTripAndRun(ctx context.Context, tripArg CreateTripParams, runArg CreateRunParams) (Trip, Run, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Trip{}, Run{}, false, fmt.Errorf("store: begin create trip: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.q.WithTx(tx)
+
+	if tripArg.RequestID != nil {
+		existing, lookupErr := q.GetTripByRequestID(ctx, tripArg.RequestID)
+		switch {
+		case lookupErr == nil:
+			run, runErr := q.GetRunByRequestID(ctx, tripArg.RequestID)
+			if runErr != nil {
+				return Trip{}, Run{}, false, fmt.Errorf("store: get run by request id: %w", runErr)
+			}
+			return existing, run, false, nil
+		case !errors.Is(lookupErr, pgx.ErrNoRows):
+			return Trip{}, Run{}, false, fmt.Errorf("store: lookup trip by request id: %w", lookupErr)
+		}
+	}
+
+	trip, err := q.CreateTrip(ctx, tripArg)
+	if err != nil {
+		return Trip{}, Run{}, false, fmt.Errorf("store: create trip: %w", err)
+	}
+	runArg.TripID = trip.ID
+	run, err := q.CreateRun(ctx, runArg)
+	if err != nil {
+		return Trip{}, Run{}, false, fmt.Errorf("store: create run: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Trip{}, Run{}, false, fmt.Errorf("store: commit create trip: %w", err)
+	}
+	return trip, run, true, nil
+}
+
+func (s *Store) ListRunsByStatus(ctx context.Context, statuses []string) ([]Run, error) {
+	return s.q.ListRunsByStatus(ctx, statuses)
+}
+
+func (s *Store) ListPlanVersions(ctx context.Context, tripID string) ([]PlanVersion, error) {
+	return s.q.ListPlanVersions(ctx, tripID)
+}
+
+func (s *Store) GetPlanVersionBySeq(ctx context.Context, tripID string, seq int32) (PlanVersion, error) {
+	return s.q.GetPlanVersionBySeq(ctx, GetPlanVersionBySeqParams{TripID: tripID, Seq: seq})
+}
+
+func (s *Store) SetPlanVersionStatus(ctx context.Context, id, status string) error {
+	return s.q.SetPlanVersionStatus(ctx, SetPlanVersionStatusParams{ID: id, Status: status})
+}
+
+// Ping reports database readiness for the /readyz probe.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
+}
