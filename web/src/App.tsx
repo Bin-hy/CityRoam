@@ -3,7 +3,7 @@ import { CreatePage } from "@/features/create/CreatePage";
 import { EvalPage } from "@/pages/EvalPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { SharePage } from "@/pages/SharePage";
-import { WorkspacePage } from "@/pages/WorkspacePage";
+import { WorkspacePage } from "@/features/workspace/WorkspacePage";
 
 export function App() {
   return (

@@ -1,0 +1,203 @@
+import { useEffect, useMemo } from "react";
+import { Link, useLocation, useParams } from "react-router-dom";
+import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useRunStream } from "@/hooks/useRunStream";
+import { useTrip } from "@/features/trips/useTrip";
+import { parseItinerary } from "@/features/itinerary/types";
+import { RunTrace } from "@/features/trace/RunTrace";
+import { stageLabels } from "@/features/trace/traceReducer";
+
+const terminalStatuses = new Set(["awaiting_user", "completed", "failed", "cancelled"]);
+
+export function WorkspacePage() {
+  const { tripId } = useParams();
+  const location = useLocation();
+  const routeRunID = (location.state as { runId?: string } | null)?.runId;
+  const tripQuery = useTrip(tripId);
+  const trip = tripQuery.data;
+  const runID = routeRunID ?? trip?.latest_run?.id;
+  const trace = useRunStream(runID, { enabled: Boolean(runID) });
+  const itinerary = useMemo(() => parseItinerary(trip?.latest_version?.plan), [trip?.latest_version?.plan]);
+
+  const refetchTrip = tripQuery.refetch;
+  useEffect(() => {
+    if (terminalStatuses.has(trace.status)) {
+      void refetchTrip();
+    }
+  }, [trace.status, refetchTrip]);
+
+  if (tripQuery.isPending) {
+    return <WorkspaceSkeleton />;
+  }
+
+  if (tripQuery.isError || !trip) {
+    return (
+      <main className="mx-auto max-w-xl px-4 py-16">
+        <Alert variant="destructive" className="space-y-3">
+          <p className="font-medium">行程加载失败</p>
+          <p>链接可能已失效，或服务暂时不可用。</p>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => void tripQuery.refetch()}>
+              重试
+            </Button>
+            <Button size="sm" variant="outline" asChild>
+              <Link to="/">返回首页</Link>
+            </Button>
+          </div>
+        </Alert>
+      </main>
+    );
+  }
+
+  const status = trip.latest_run?.status ?? trace.status;
+  const stage = trip.latest_run?.stage ?? trace.stage;
+
+  return (
+    <div className="flex min-h-screen flex-col">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b bg-card/80 px-4 py-3 backdrop-blur">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" asChild>
+            <Link to="/" aria-label="返回首页">
+              <ArrowLeft className="h-4 w-4" />
+            </Link>
+          </Button>
+          <div>
+            <h1 className="text-base font-semibold">
+              {trip.city === "beijing" || !trip.city ? "北京" : trip.city} · {trip.days} 天
+            </h1>
+            <p className="text-xs text-muted-foreground">Trip {trip.id.slice(0, 8)}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Badge variant={status === "failed" ? "destructive" : status === "awaiting_user" ? "warning" : "secondary"}>
+            {stageLabels[stage] ?? stage}
+          </Badge>
+          <span>{status}</span>
+        </div>
+      </header>
+
+      <main className="grid flex-1 gap-4 p-4 lg:grid-cols-[300px_minmax(0,1fr)_320px]">
+        <aside className="order-2 min-h-[420px] lg:order-1">
+          <RunTrace state={trace} connected={trace.connected} />
+        </aside>
+
+        <section className="order-1 space-y-4 lg:order-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>地图</CardTitle>
+              <CardDescription>按天展示路线与标记。</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex h-64 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground">
+                {itinerary ? "地图将在接入高德后显示" : "等待方案生成…"}
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>时间轴</CardTitle>
+              <CardDescription>按天查看景点、餐饮与交通。</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {itinerary ? (
+                <div className="space-y-2">
+                  {itinerary.days.map((day, index) => (
+                    <div key={`${day.date}-${index}`} className="rounded-lg border p-3 text-sm">
+                      <p className="font-medium">
+                        第 {index + 1} 天 · {day.date}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {day.blocks.length} 个安排 · {day.start_time}–{day.end_time}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  等待方案生成…
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        <aside className="order-3 space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>预算</CardTitle>
+              <CardDescription>门票、餐饮、交通与总计。</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {itinerary ? (
+                <dl className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <dt className="text-muted-foreground">总计</dt>
+                    <dd className="font-semibold">¥{itinerary.totals.cost_yuan}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-muted-foreground">景点</dt>
+                    <dd>{itinerary.totals.poi_count} 个</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-muted-foreground">步行</dt>
+                    <dd>{itinerary.totals.walking_km.toFixed(1)} km</dd>
+                  </div>
+                </dl>
+              ) : (
+                <p className="text-sm text-muted-foreground">暂无预算。</p>
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>版本</CardTitle>
+              <CardDescription>方案历史与差异。</CardDescription>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              {trip.latest_version ? `当前 v${trip.latest_version.seq}` : "尚无版本"}
+            </CardContent>
+          </Card>
+        </aside>
+      </main>
+      <footer className="border-t px-4 py-3 text-xs text-muted-foreground">
+        AI 生成，价格与时间为估算；出行前请核实开放时间与门票。
+      </footer>
+    </div>
+  );
+}
+
+function WorkspaceSkeleton() {
+  return (
+    <div className="min-h-screen p-4">
+      <div className="mb-4 flex items-center gap-3">
+        <Skeleton className="h-9 w-9" />
+        <div className="space-y-1">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-3 w-20" />
+        </div>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)_320px]">
+        <Skeleton className="h-[480px]" />
+        <div className="space-y-4">
+          <Skeleton className="h-72" />
+          <Skeleton className="h-56" />
+        </div>
+        <div className="space-y-4">
+          <Skeleton className="h-48" />
+          <Skeleton className="h-40" />
+        </div>
+      </div>
+      <p className="mt-4 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+        <AlertTriangle className="h-4 w-4" />
+        正在加载行程…
+      </p>
+    </div>
+  );
+}
+
