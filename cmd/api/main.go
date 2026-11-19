@@ -1,9 +1,22 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+
+	"trippilot/internal/config"
+	"trippilot/internal/logging"
+)
 
 const version = "0.1.0-dev"
 
 func main() {
-	fmt.Printf("trippilot api %s\n", version)
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	logger := logging.New(cfg.LogLevel)
+	logger.Info("trippilot api starting", "version", version, "port", cfg.Port)
 }
