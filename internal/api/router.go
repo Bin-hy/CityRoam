@@ -67,7 +67,7 @@ func NewRouter(deps Deps) http.Handler {
 
 		api.Get("/runs/{runID}", handleNotImplemented())
 		api.Get("/runs/{runID}/trace", handleNotImplemented())
-		api.Get("/runs/{runID}/events", handleNotImplemented())
+		api.Get("/runs/{runID}/events", handleRunEvents(deps))
 
 		api.Get("/share/{slug}", handleNotImplemented())
 
