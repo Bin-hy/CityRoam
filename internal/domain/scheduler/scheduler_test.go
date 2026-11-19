@@ -47,6 +47,9 @@ func TestSchedulerStart(t *testing.T) {
 		if block.Start != "09:00" || block.End != "12:00" || block.DurationMin != 180 {
 			t.Fatalf("block time = %+v, want 09:00-12:00 for 180 minutes", block)
 		}
+		if block.Lat != museum.Lat || block.Lng != museum.Lng {
+			t.Fatalf("block coords = (%f, %f), want (%f, %f)", block.Lat, block.Lng, museum.Lat, museum.Lng)
+		}
 		if plan.Totals.POICount != 1 {
 			t.Fatalf("POICount = %d, want 1", plan.Totals.POICount)
 		}

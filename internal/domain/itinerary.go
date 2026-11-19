@@ -70,6 +70,8 @@ type Block struct {
 	ID          string     `json:"id"`
 	Type        string     `json:"type"`
 	POIID       string     `json:"poi_id,omitempty"`
+	Lat         float64    `json:"lat,omitempty"`
+	Lng         float64    `json:"lng,omitempty"`
 	Title       string     `json:"title"`
 	Start       string     `json:"start"`
 	End         string     `json:"end"`

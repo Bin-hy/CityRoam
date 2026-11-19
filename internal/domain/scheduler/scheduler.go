@@ -114,6 +114,8 @@ func (s *Scheduler) Build(
 				ID:          nextBlockID(),
 				Type:        blockType,
 				POIID:       poi.ID,
+				Lat:         poi.Lat,
+				Lng:         poi.Lng,
 				Title:       displayName(poi),
 				Start:       domain.FormatClock(startAt),
 				End:         domain.FormatClock(startAt + duration),
