@@ -474,6 +474,41 @@ func checkC12(plan domain.Itinerary, pois map[string]domain.POI) []domain.Violat
 	return violations
 }
 
+func checkC11(plan domain.Itinerary, pois map[string]domain.POI, constraints domain.ConstraintSet) []domain.Violation {
+	if !constraints.Weather.RainAware {
+		return nil
+	}
+
+	violations := make([]domain.Violation, 0)
+	for dayIndex, day := range plan.Days {
+		total, outdoor := 0, 0
+		for _, block := range day.Blocks {
+			if block.Type != domain.BlockTypePOI {
+				continue
+			}
+			poi, found := pois[block.POIID]
+			if !found {
+				continue
+			}
+			total++
+			if poi.Outdoor {
+				outdoor++
+			}
+		}
+		if total == 0 || float64(outdoor)/float64(total) <= 0.6 {
+			continue
+		}
+		violations = append(violations, domain.Violation{
+			Code:       "C11",
+			Level:      domain.LevelWarning,
+			Day:        dayIndex + 1,
+			Message:    fmt.Sprintf("第 %d 天户外点位占 %d/%d，雨天风险较高", dayIndex+1, outdoor, total),
+			Suggestion: "换成室内点位或准备雨天备选",
+		})
+	}
+	return violations
+}
+
 func normalizeName(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }

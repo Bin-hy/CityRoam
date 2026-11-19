@@ -3,6 +3,8 @@ package validator
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -420,6 +422,134 @@ func TestC12(t *testing.T) {
 			t.Fatalf("C12 violations = %+v, want none", c12)
 		}
 	})
+}
+
+func TestC11(t *testing.T) {
+	indoor := openAllDayPOI("in", "室内", "东城")
+	outdoor := openAllDayPOI("out", "户外", "东城")
+	outdoor.Outdoor = true
+	pois := map[string]domain.POI{indoor.ID: indoor, outdoor.ID: outdoor}
+
+	tests := []struct {
+		name      string
+		ids       []string
+		rainAware bool
+		wantCount int
+	}{
+		{name: "mostly outdoor warns", ids: []string{"out", "out"}, rainAware: true, wantCount: 1},
+		{name: "half outdoor passes", ids: []string{"out", "in"}, rainAware: true},
+		{name: "rain aware disabled", ids: []string{"out", "out"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blocks := make([]domain.Block, 0, len(tt.ids))
+			for _, id := range tt.ids {
+				blocks = append(blocks, poiBlock(id, "09:00", 60))
+			}
+			plan := domain.Itinerary{Days: []domain.DayPlan{{Date: "2026-11-16", Blocks: blocks}}}
+			constraints := domain.ConstraintSet{Weather: domain.WeatherConstraint{RainAware: tt.rainAware}}
+			c11 := violationsByCode(Validate(plan, constraints, pois, nil), "C11")
+			if len(c11) != tt.wantCount {
+				t.Fatalf("C11 violations = %+v, want %d", c11, tt.wantCount)
+			}
+			if tt.wantCount > 0 {
+				assertViolation(t, c11[0], "C11", domain.LevelWarning)
+			}
+		})
+	}
+}
+
+func TestFullRuleCoverage(t *testing.T) {
+	ticket := 50
+	venue := openAllDayPOI("a", "A", "东城")
+	venue.Outdoor = true
+	venue.SuggestedMinutes = 180
+	venue.TicketYuan = &ticket
+	venue.OpenHours = []domain.OpenRange{{Days: []int{1}, Start: "09:00", End: "12:00"}}
+	closedOnMonday := openAllDayPOI("b", "B", "东城")
+	closedOnMonday.SuggestedMinutes = 60
+	closedOnMonday.OpenHours = []domain.OpenRange{{Days: []int{2}, Start: "09:00", End: "17:00"}}
+	pois := map[string]domain.POI{venue.ID: venue, closedOnMonday.ID: closedOnMonday}
+
+	transit := domain.Transport{Mode: domain.TransportWalk, DurationMin: 10, DistanceM: 500}
+	plan := domain.Itinerary{
+		City: "beijing",
+		Days: []domain.DayPlan{{
+			Date:      "2026-11-16",
+			StartTime: "08:30",
+			EndTime:   "21:30",
+			Blocks: []domain.Block{
+				{ID: "b1", Type: domain.BlockTypePOI, POIID: venue.ID, Title: venue.Name, Start: "08:30", End: "09:30", DurationMin: 60},
+				{ID: "t1", Type: domain.BlockTypeTransit, Title: "前往 A", Start: "09:30", End: "09:35", DurationMin: 5, Transport: &transit},
+				{ID: "b2", Type: domain.BlockTypePOI, POIID: venue.ID, Title: venue.Name, Start: "09:35", End: "10:35", DurationMin: 60},
+				{ID: "b3", Type: domain.BlockTypePOI, POIID: closedOnMonday.ID, Title: closedOnMonday.Name, Start: "10:35", End: "11:05", DurationMin: 30},
+				{ID: "m1", Type: domain.BlockTypeMeal, Title: "午餐", Start: "15:00", End: "15:30", DurationMin: 30, CostYuan: 50},
+			},
+		}},
+		Totals: domain.Totals{CostYuan: 200},
+	}
+	constraints := domain.ConstraintSet{
+		City:      "beijing",
+		Days:      1,
+		Budget:    domain.BudgetConstraint{TotalYuan: 100, Hard: true},
+		Daily:     domain.DailyConstraint{MaxHours: 9, StartTime: "09:00", EndTime: "21:00"},
+		Meals:     domain.MealConstraint{Enabled: true},
+		Pace:      domain.PacePacked,
+		MustVisit: []string{"故宫"},
+		Weather:   domain.WeatherConstraint{RainAware: true},
+	}
+	routes := &fakeRouteProvider{transport: transit}
+
+	violations := Validate(plan, constraints, pois, routes)
+	seen := make(map[string]bool)
+	for _, violation := range violations {
+		number, ok := ruleNumber(violation.Code)
+		if !ok || number < 1 || number > 12 {
+			t.Fatalf("unexpected violation code %q", violation.Code)
+		}
+		seen[violation.Code] = true
+	}
+	for number := 1; number <= 12; number++ {
+		code := "C" + strconv.Itoa(number)
+		if !seen[code] {
+			t.Fatalf("code %s not covered by violations: %+v", code, violations)
+		}
+	}
+
+	blockingSeen := false
+	lastLevel := domain.LevelBlocking
+	lastNumber := 0
+	for _, violation := range violations {
+		number, _ := ruleNumber(violation.Code)
+		if violation.Level != lastLevel {
+			if violation.Level != domain.LevelWarning || !blockingSeen {
+				t.Fatalf("violations not grouped by level: %+v", violations)
+			}
+			lastLevel = violation.Level
+			lastNumber = 0
+		}
+		if violation.Level == domain.LevelBlocking {
+			blockingSeen = true
+		}
+		if number < lastNumber {
+			t.Fatalf("violations not sorted by rule number: %+v", violations)
+		}
+		lastNumber = number
+	}
+
+	again := Validate(plan, constraints, pois, routes)
+	if !reflect.DeepEqual(violations, again) {
+		t.Fatalf("validator is not deterministic:\nfirst=%+v\nsecond=%+v", violations, again)
+	}
+}
+
+func ruleNumber(code string) (int, bool) {
+	if len(code) < 2 || code[0] != 'C' {
+		return 0, false
+	}
+	number, err := strconv.Atoi(code[1:])
+	return number, err == nil
 }
 
 func TestC10(t *testing.T) {

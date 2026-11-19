@@ -21,6 +21,7 @@ func Validate(
 	violations = append(violations, checkC8(plan)...)
 	violations = append(violations, checkC9(plan, constraints)...)
 	violations = append(violations, checkC10(plan, constraints)...)
+	violations = append(violations, checkC11(plan, pois, constraints)...)
 	violations = append(violations, checkC12(plan, pois)...)
 	domain.Sort(violations)
 	return violations
