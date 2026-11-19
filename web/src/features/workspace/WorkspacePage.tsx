@@ -11,6 +11,7 @@ import { useTrip } from "@/features/trips/useTrip";
 import { parseItinerary } from "@/features/itinerary/types";
 import { RunTrace } from "@/features/trace/RunTrace";
 import { ItineraryTimeline } from "@/features/timeline/ItineraryTimeline";
+import { TripMap } from "@/features/map/TripMap";
 import { stageLabels } from "@/features/trace/traceReducer";
 
 const terminalStatuses = new Set(["awaiting_user", "completed", "failed", "cancelled"]);
@@ -92,12 +93,16 @@ export function WorkspacePage() {
           <Card>
             <CardHeader>
               <CardTitle>地图</CardTitle>
-              <CardDescription>按天展示路线与标记。</CardDescription>
+              <CardDescription>按天展示路线与标记，点击标记同步时间轴。</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex h-64 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground">
-                {itinerary ? "地图将在接入高德后显示" : "等待方案生成…"}
-              </div>
+              {itinerary ? (
+                <TripMap itinerary={itinerary} selectedBlockID={selectedBlockID} onSelectBlock={setSelectedBlockID} />
+              ) : (
+                <div className="flex h-64 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground">
+                  等待方案生成…
+                </div>
+              )}
             </CardContent>
           </Card>
           <Card>

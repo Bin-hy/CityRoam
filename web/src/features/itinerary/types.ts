@@ -12,6 +12,8 @@ export interface Block {
   id: string;
   type: "poi" | "meal" | "transit" | "rest" | string;
   poi_id?: string;
+  lat?: number;
+  lng?: number;
   title: string;
   start: string;
   end: string;
