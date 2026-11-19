@@ -1,0 +1,17 @@
+{
+  "case_id": "d2-budget-tight",
+  "input": "北京两天穷游，预算必须不超过 300 元，优先免费景点，可以少安排收费景点。",
+  "tags": [
+    "2day",
+    "budget"
+  ],
+  "expected": {
+    "days": 2,
+    "hard_rules": [
+      "C5",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": []
+  }
+}

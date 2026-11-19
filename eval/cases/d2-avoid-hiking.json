@@ -1,0 +1,19 @@
+{
+  "case_id": "d2-avoid-hiking",
+  "input": "北京两天，不想爬山也不想去人多拥挤的地方，喜欢公园和博物馆。",
+  "tags": [
+    "2day",
+    "avoid"
+  ],
+  "expected": {
+    "days": 2,
+    "hard_rules": [
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": [
+      "爬山",
+      "人多"
+    ]
+  }
+}

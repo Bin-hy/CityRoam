@@ -166,6 +166,7 @@ func (g *Graph) parse(ctx context.Context, state *TripState) (*TripState, error)
 	}
 	state.Constraints = out.Constraints
 	state.Missing = out.Missing
+	state.LLM = addUsage(state.LLM, out.Usage)
 	if len(out.Missing) > 0 {
 		state.Status = StatusAwaitingUser
 	}
@@ -191,6 +192,7 @@ func (g *Graph) draft(ctx context.Context, state *TripState) (*TripState, error)
 		return nil, err
 	}
 	state.Draft = out.Draft
+	state.LLM = addUsage(state.LLM, out.Usage)
 	return state, nil
 }
 
@@ -270,6 +272,7 @@ func (g *Graph) repair(ctx context.Context, state *TripState) (*TripState, error
 	state.Draft = out.Draft
 	state.Plan = out.Plan
 	state.Violations = out.Violations
+	state.LLM = addUsage(state.LLM, out.Usage)
 	state.Round = round
 	return state, nil
 }

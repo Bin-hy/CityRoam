@@ -28,3 +28,8 @@ RETURNING *;
 SELECT * FROM eval_runs
 WHERE case_id = $1
 ORDER BY created_at DESC;
+
+-- name: ListEvalRuns :many
+SELECT * FROM eval_runs
+ORDER BY created_at DESC
+LIMIT 200;

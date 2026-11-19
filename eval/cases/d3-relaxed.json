@@ -1,0 +1,20 @@
+{
+  "case_id": "d3-relaxed",
+  "input": "北京三天慢慢玩，节奏轻松，每天最多玩 6 小时，不去爬山。",
+  "tags": [
+    "3day",
+    "relaxed",
+    "hours"
+  ],
+  "expected": {
+    "days": 3,
+    "hard_rules": [
+      "C4",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": [
+      "爬山"
+    ]
+  }
+}

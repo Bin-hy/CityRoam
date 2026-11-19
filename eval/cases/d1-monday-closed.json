@@ -1,0 +1,18 @@
+{
+  "case_id": "d1-monday-closed",
+  "input": "2026-11-23 周一北京一日游，必须去故宫博物院，预算 300 元，如果闭馆请换开放景点。",
+  "tags": [
+    "1day",
+    "closed",
+    "date"
+  ],
+  "expected": {
+    "days": 1,
+    "hard_rules": [
+      "C2",
+      "C5"
+    ],
+    "must_visit": [],
+    "avoid": []
+  }
+}

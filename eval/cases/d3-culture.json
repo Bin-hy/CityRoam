@@ -1,0 +1,19 @@
+{
+  "case_id": "d3-culture",
+  "input": "北京三天文化艺术游，喜欢美术馆和博物馆，不想去主题公园。",
+  "tags": [
+    "3day",
+    "art",
+    "museum"
+  ],
+  "expected": {
+    "days": 3,
+    "hard_rules": [
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": [
+      "主题公园"
+    ]
+  }
+}

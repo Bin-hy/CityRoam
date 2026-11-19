@@ -26,6 +26,7 @@ type Usage struct {
 	PromptTokens     int           `json:"prompt_tokens"`
 	CompletionTokens int           `json:"completion_tokens"`
 	TotalTokens      int           `json:"total_tokens"`
+	Calls            int           `json:"calls"`
 	Attempts         int           `json:"attempts"`
 	Duration         time.Duration `json:"duration"`
 }
@@ -101,7 +102,7 @@ func NewOpenAIClient(baseURL, apiKey, model string, opts ...Option) (*OpenAIClie
 // do not implement response_format json_schema.
 func (c *OpenAIClient) GenerateJSON(ctx context.Context, prompt string, schema json.RawMessage) (json.RawMessage, Usage, error) {
 	start := time.Now()
-	usage := Usage{Model: c.model}
+	usage := Usage{Model: c.model, Calls: 1}
 
 	if len(schema) > 0 {
 		if len(schema) > defaultMaxSchemaBytes {

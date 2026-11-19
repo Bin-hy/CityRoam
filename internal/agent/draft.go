@@ -183,6 +183,7 @@ func addUsage(total, add Usage) Usage {
 	total.PromptTokens += add.PromptTokens
 	total.CompletionTokens += add.CompletionTokens
 	total.TotalTokens += add.TotalTokens
+	total.Calls += add.Calls
 	total.Attempts += add.Attempts
 	total.Duration += add.Duration
 	if add.Model != "" {

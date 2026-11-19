@@ -1,0 +1,22 @@
+{
+  "case_id": "d3-packed",
+  "input": "北京三天紧凑游，必须去八达岭长城和故宫博物院，预算 2000 元。",
+  "tags": [
+    "3day",
+    "packed",
+    "must_visit"
+  ],
+  "expected": {
+    "days": 3,
+    "hard_rules": [
+      "C5",
+      "C7",
+      "C8"
+    ],
+    "must_visit": [
+      "八达岭长城",
+      "故宫博物院"
+    ],
+    "avoid": []
+  }
+}

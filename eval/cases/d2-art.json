@@ -1,0 +1,17 @@
+{
+  "case_id": "d2-art",
+  "input": "北京两天，喜欢艺术展和咖啡馆，想逛 798 和红砖美术馆，节奏轻松。",
+  "tags": [
+    "2day",
+    "art",
+    "relaxed"
+  ],
+  "expected": {
+    "days": 2,
+    "hard_rules": [
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": []
+  }
+}

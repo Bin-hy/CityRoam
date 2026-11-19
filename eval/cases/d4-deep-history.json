@@ -1,0 +1,23 @@
+{
+  "case_id": "d4-deep-history",
+  "input": "北京四天深度历史游，必须去八达岭长城、颐和园和天坛公园，预算 2500 元。",
+  "tags": [
+    "4day",
+    "history",
+    "must_visit"
+  ],
+  "expected": {
+    "days": 4,
+    "hard_rules": [
+      "C5",
+      "C7",
+      "C8"
+    ],
+    "must_visit": [
+      "八达岭长城",
+      "颐和园",
+      "天坛公园"
+    ],
+    "avoid": []
+  }
+}

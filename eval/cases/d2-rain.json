@@ -1,0 +1,18 @@
+{
+  "case_id": "d2-rain",
+  "input": "北京两天，预报有雨，尽量安排室内景点，预算 800 元。",
+  "tags": [
+    "2day",
+    "rain"
+  ],
+  "expected": {
+    "days": 2,
+    "hard_rules": [
+      "C11",
+      "C5",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": []
+  }
+}

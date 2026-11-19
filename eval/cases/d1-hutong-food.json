@@ -1,0 +1,19 @@
+{
+  "case_id": "d1-hutong-food",
+  "input": "北京一日游，喜欢胡同、咖啡和本地小吃，节奏轻松，不喜欢爬山。",
+  "tags": [
+    "1day",
+    "food",
+    "relaxed"
+  ],
+  "expected": {
+    "days": 1,
+    "hard_rules": [
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": [
+      "爬山"
+    ]
+  }
+}

@@ -18,6 +18,10 @@ func (s *Store) InsertEvalRun(ctx context.Context, arg InsertEvalRunParams) (Eva
 	return s.q.InsertEvalRun(ctx, arg)
 }
 
+func (s *Store) ListEvalRuns(ctx context.Context) ([]EvalRun, error) {
+	return s.q.ListEvalRuns(ctx)
+}
+
 func (s *Store) ListEvalRunsByCase(ctx context.Context, caseID string) ([]EvalRun, error) {
 	return s.q.ListEvalRunsByCase(ctx, caseID)
 }

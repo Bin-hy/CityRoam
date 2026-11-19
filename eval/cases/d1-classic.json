@@ -1,0 +1,22 @@
+{
+  "case_id": "d1-classic",
+  "input": "北京一日游，必须去故宫博物院，预算 300 元以内，节奏正常。",
+  "tags": [
+    "1day",
+    "history",
+    "must_visit",
+    "budget"
+  ],
+  "expected": {
+    "days": 1,
+    "hard_rules": [
+      "C5",
+      "C7",
+      "C8"
+    ],
+    "must_visit": [
+      "故宫博物院"
+    ],
+    "avoid": []
+  }
+}

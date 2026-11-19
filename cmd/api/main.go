@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 	"trippilot/internal/agent"
 	"trippilot/internal/api"
 	"trippilot/internal/config"
+	"trippilot/internal/eval"
 	"trippilot/internal/events"
 	"trippilot/internal/logging"
 	"trippilot/internal/repo"
@@ -27,6 +29,7 @@ import (
 const version = "0.1.0-dev"
 
 const poiSnapshotPath = "data/poi/beijing.json"
+const evalCasesPath = "eval/cases"
 
 func main() {
 	if err := run(); err != nil {
@@ -123,6 +126,7 @@ func run() error {
 		Broker:           broker,
 		Store:            store,
 		Runner:           runner,
+		Eval:             newEvalService(store, runner, logger),
 	})
 
 	server := &http.Server{
@@ -156,4 +160,19 @@ func run() error {
 		logger.Error("http shutdown", "error", err)
 	}
 	return nil
+}
+
+func newEvalService(store *repo.Store, runner *agent.Runner, logger *slog.Logger) api.EvalService {
+	cases, err := eval.LoadCases(evalCasesPath)
+	if err != nil {
+		logger.Warn("eval cases unavailable", "error", err)
+		return nil
+	}
+	batch := eval.NewRunner(store, runner, eval.WithRunnerLogger(logger))
+	service, err := eval.NewService(store, batch, cases, logger)
+	if err != nil {
+		logger.Warn("eval service unavailable", "error", err)
+		return nil
+	}
+	return service
 }

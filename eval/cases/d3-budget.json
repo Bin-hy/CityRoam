@@ -1,0 +1,20 @@
+{
+  "case_id": "d3-budget",
+  "input": "北京三天，预算必须不超过 900 元，必须去天坛公园，住得简单，少打车。",
+  "tags": [
+    "3day",
+    "budget"
+  ],
+  "expected": {
+    "days": 3,
+    "hard_rules": [
+      "C5",
+      "C7",
+      "C8"
+    ],
+    "must_visit": [
+      "天坛公园"
+    ],
+    "avoid": []
+  }
+}

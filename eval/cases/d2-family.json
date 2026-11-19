@@ -1,0 +1,17 @@
+{
+  "case_id": "d2-family",
+  "input": "北京两天亲子游，去动物园和科技馆，预算 1000 元，节奏正常。",
+  "tags": [
+    "2day",
+    "family"
+  ],
+  "expected": {
+    "days": 2,
+    "hard_rules": [
+      "C5",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": []
+  }
+}

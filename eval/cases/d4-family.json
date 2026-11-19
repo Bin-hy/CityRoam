@@ -1,0 +1,18 @@
+{
+  "case_id": "d4-family",
+  "input": "北京四天亲子游，想去动物园、科技馆和海洋馆，预算 3000 元，节奏轻松。",
+  "tags": [
+    "4day",
+    "family",
+    "budget"
+  ],
+  "expected": {
+    "days": 4,
+    "hard_rules": [
+      "C5",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": []
+  }
+}

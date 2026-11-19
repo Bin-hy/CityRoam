@@ -1,0 +1,19 @@
+{
+  "case_id": "d2-nightlife",
+  "input": "北京两天，想体验夜生活和胡同，不要太早起，避开爬山。",
+  "tags": [
+    "2day",
+    "nightlife"
+  ],
+  "expected": {
+    "days": 2,
+    "hard_rules": [
+      "C8",
+      "C10"
+    ],
+    "must_visit": [],
+    "avoid": [
+      "爬山"
+    ]
+  }
+}

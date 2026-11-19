@@ -1,0 +1,23 @@
+{
+  "case_id": "d3-comprehensive",
+  "input": "北京三天，历史、博物馆和美食都想体验，必须去故宫博物院和颐和园，预算 1500 元。",
+  "tags": [
+    "3day",
+    "history",
+    "food",
+    "must_visit"
+  ],
+  "expected": {
+    "days": 3,
+    "hard_rules": [
+      "C5",
+      "C7",
+      "C8"
+    ],
+    "must_visit": [
+      "故宫博物院",
+      "颐和园"
+    ],
+    "avoid": []
+  }
+}

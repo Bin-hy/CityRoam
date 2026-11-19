@@ -125,6 +125,40 @@ func (q *Queries) ListEvalCases(ctx context.Context) ([]EvalCase, error) {
 	return items, nil
 }
 
+const listEvalRuns = `-- name: ListEvalRuns :many
+SELECT id, case_id, run_id, metrics, passed, duration_ms, created_at FROM eval_runs
+ORDER BY created_at DESC
+LIMIT 200
+`
+
+func (q *Queries) ListEvalRuns(ctx context.Context) ([]EvalRun, error) {
+	rows, err := q.db.Query(ctx, listEvalRuns)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EvalRun
+	for rows.Next() {
+		var i EvalRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.CaseID,
+			&i.RunID,
+			&i.Metrics,
+			&i.Passed,
+			&i.DurationMs,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEvalRunsByCase = `-- name: ListEvalRunsByCase :many
 SELECT id, case_id, run_id, metrics, passed, duration_ms, created_at FROM eval_runs
 WHERE case_id = $1

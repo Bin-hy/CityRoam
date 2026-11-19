@@ -1,0 +1,18 @@
+{
+  "case_id": "d1-family",
+  "input": "带家人北京玩一天，想去博物馆和公园，预算 400 元，走路别太多。",
+  "tags": [
+    "1day",
+    "family",
+    "budget"
+  ],
+  "expected": {
+    "days": 1,
+    "hard_rules": [
+      "C5",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": []
+  }
+}

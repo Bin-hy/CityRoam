@@ -51,6 +51,7 @@ type TripState struct {
 	History        []RoundMetrics       `json:"history,omitempty"`
 	StopReason     string               `json:"stop_reason,omitempty"`
 	Suggestions    []string             `json:"suggestions,omitempty"`
+	LLM            Usage                `json:"llm,omitzero"`
 	Snapshot       *VersionSnapshot     `json:"snapshot,omitempty"`
 	Proposal       *AdjustmentProposal  `json:"proposal,omitempty"`
 	Previous       *domain.Itinerary    `json:"previous,omitempty"`

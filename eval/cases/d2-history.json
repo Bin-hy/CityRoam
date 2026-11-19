@@ -1,0 +1,22 @@
+{
+  "case_id": "d2-history",
+  "input": "北京两天，重点是历史，必须去故宫博物院和天坛公园，预算 800 元。",
+  "tags": [
+    "2day",
+    "history",
+    "must_visit"
+  ],
+  "expected": {
+    "days": 2,
+    "hard_rules": [
+      "C5",
+      "C7",
+      "C8"
+    ],
+    "must_visit": [
+      "故宫博物院",
+      "天坛公园"
+    ],
+    "avoid": []
+  }
+}

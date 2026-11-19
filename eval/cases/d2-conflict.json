@@ -1,0 +1,19 @@
+{
+  "case_id": "d2-conflict",
+  "input": "北京两天，必须去故宫博物院、八达岭长城、颐和园和天坛公园，预算必须不超过 200 元。",
+  "tags": [
+    "2day",
+    "conflict",
+    "must_visit",
+    "budget"
+  ],
+  "expected": {
+    "days": 2,
+    "hard_rules": [
+      "C5",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": []
+  }
+}

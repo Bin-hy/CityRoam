@@ -1,0 +1,21 @@
+{
+  "case_id": "d1-museum-budget",
+  "input": "北京一天，想看中国国家博物馆和附近的历史景点，预算必须控制在 200 元以内。",
+  "tags": [
+    "1day",
+    "museum",
+    "budget"
+  ],
+  "expected": {
+    "days": 1,
+    "hard_rules": [
+      "C5",
+      "C7",
+      "C8"
+    ],
+    "must_visit": [
+      "中国国家博物馆"
+    ],
+    "avoid": []
+  }
+}
