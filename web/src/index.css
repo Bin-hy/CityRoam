@@ -33,3 +33,41 @@
     font-feature-settings: "tnum" 1;
   }
 }
+
+
+/* Timeline blocks */
+.vis-timeline {
+  border-color: hsl(var(--border));
+  font-family: inherit;
+}
+.vis-item.tp-block {
+  border-radius: 6px;
+  font-size: 12px;
+  color: #14532d;
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+.vis-item.tp-block-poi {
+  border-color: #86efac;
+  background: #ecfdf5;
+}
+.vis-item.tp-block-meal {
+  border-color: #fdba74;
+  background: #fff7ed;
+  color: #7c2d12;
+}
+.vis-item.tp-block-transit {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  border-style: dashed;
+}
+.vis-item.tp-block-rest {
+  border-color: #c4b5fd;
+  background: #f5f3ff;
+  color: #4c1d95;
+}
+.vis-item.vis-selected.tp-block {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 1px;
+}

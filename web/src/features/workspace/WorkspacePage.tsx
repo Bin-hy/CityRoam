@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
@@ -10,6 +10,7 @@ import { useRunStream } from "@/hooks/useRunStream";
 import { useTrip } from "@/features/trips/useTrip";
 import { parseItinerary } from "@/features/itinerary/types";
 import { RunTrace } from "@/features/trace/RunTrace";
+import { ItineraryTimeline } from "@/features/timeline/ItineraryTimeline";
 import { stageLabels } from "@/features/trace/traceReducer";
 
 const terminalStatuses = new Set(["awaiting_user", "completed", "failed", "cancelled"]);
@@ -23,6 +24,7 @@ export function WorkspacePage() {
   const runID = routeRunID ?? trip?.latest_run?.id;
   const trace = useRunStream(runID, { enabled: Boolean(runID) });
   const itinerary = useMemo(() => parseItinerary(trip?.latest_version?.plan), [trip?.latest_version?.plan]);
+  const [selectedBlockID, setSelectedBlockID] = useState<string | null>(null);
 
   const refetchTrip = tripQuery.refetch;
   useEffect(() => {
@@ -101,22 +103,17 @@ export function WorkspacePage() {
           <Card>
             <CardHeader>
               <CardTitle>时间轴</CardTitle>
-              <CardDescription>按天查看景点、餐饮与交通。</CardDescription>
+              <CardDescription>
+                {selectedBlockID ? `已选中 ${selectedBlockID}，地图将同步高亮。` : "按天查看景点、餐饮与交通。"}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               {itinerary ? (
-                <div className="space-y-2">
-                  {itinerary.days.map((day, index) => (
-                    <div key={`${day.date}-${index}`} className="rounded-lg border p-3 text-sm">
-                      <p className="font-medium">
-                        第 {index + 1} 天 · {day.date}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {day.blocks.length} 个安排 · {day.start_time}–{day.end_time}
-                      </p>
-                    </div>
-                  ))}
-                </div>
+                <ItineraryTimeline
+                  itinerary={itinerary}
+                  selectedBlockID={selectedBlockID}
+                  onSelectBlock={setSelectedBlockID}
+                />
               ) : (
                 <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
