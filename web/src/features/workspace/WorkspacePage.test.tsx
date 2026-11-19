@@ -109,6 +109,14 @@ vi.mock("@/features/versions/VersionPanel", () => ({
   VersionPanel: () => <div>version-panel</div>,
 }));
 
+vi.mock("@/features/share/ShareDialog", () => ({
+  ShareDialog: () => <button type="button">分享</button>,
+}));
+
+vi.mock("./RunActions", () => ({
+  RunActions: () => <div>run-actions</div>,
+}));
+
 vi.mock("@/features/map/TripMap", () => ({
   TripMap: ({
     selectedBlockID,
@@ -136,9 +144,27 @@ function renderWorkspace() {
   );
 }
 
+function setDesktop(desktop: boolean) {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    configurable: true,
+    value: (query: string) => ({
+      matches: desktop,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
 describe("WorkspacePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setDesktop(true);
   });
 
   it("links the timeline and the map through one selection", async () => {
@@ -154,6 +180,18 @@ describe("WorkspacePage", () => {
     await userEvent.click(screen.getByRole("button", { name: "点击地图标记" }));
     expect(screen.getByText("timeline:b-1")).toBeInTheDocument();
     expect(screen.getByText("map:b-1")).toBeInTheDocument();
+  });
+
+  it("uses tabs for map and timeline on mobile", async () => {
+    setDesktop(false);
+    renderWorkspace();
+
+    expect(screen.getByText("timeline:none")).toBeInTheDocument();
+    expect(screen.queryByText("map:none")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "地图" }));
+    expect(screen.getByText("map:none")).toBeInTheDocument();
+    expect(screen.queryByText("timeline:none")).not.toBeInTheDocument();
   });
 
   it("shows budget numbers that match the plan", () => {
