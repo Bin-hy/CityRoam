@@ -1,0 +1,17 @@
+用户对已有行程提出了调整：
+{{.Input}}
+
+当前约束（JSON）：
+{{json .Constraints}}
+
+当前行程（JSON）：
+{{json .BasePlan}}
+
+调整范围：{{.Scope}}；受影响的天（0-based）：{{json .AffectedDays}}。
+
+输出一个 DayPatch JSON 描述修改。规则：
+- day_index 必须是受影响的天之一。
+- poi_id 只能来自当前行程中已有的地点，或系统提供的候选地点，禁止编造。
+- 未受影响的天保持原样，不要输出整份行程。
+- 不要输出交通、精确时间或费用。
+- 只输出一个 JSON 对象，不要输出解释或 Markdown。

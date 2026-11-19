@@ -3,13 +3,13 @@ module trippilot
 go 1.24
 
 require (
+	github.com/google/jsonschema-go v0.4.2
 	github.com/jackc/pgx/v5 v5.7.4
 	github.com/modelcontextprotocol/go-sdk v1.3.1
 	github.com/pressly/goose/v3 v3.24.3
 )
 
 require (
-	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
