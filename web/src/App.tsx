@@ -1,5 +1,5 @@
 import { Route, Routes } from "react-router-dom";
-import { CreatePage } from "@/pages/CreatePage";
+import { CreatePage } from "@/features/create/CreatePage";
 import { EvalPage } from "@/pages/EvalPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { SharePage } from "@/pages/SharePage";
