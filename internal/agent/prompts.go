@@ -26,6 +26,7 @@ type ParsePromptData struct {
 type DraftPromptData struct {
 	Constraints json.RawMessage
 	Candidates  json.RawMessage
+	Research    json.RawMessage
 	Days        int
 }
 

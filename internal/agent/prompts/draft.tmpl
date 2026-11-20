@@ -5,7 +5,16 @@
 
 候选地点（JSON）：
 {{json .Candidates}}
+{{if .Research}}
+研究提示（JSON）：
+{{json .Research}}
 
+研究规则：
+- 用户可能提及住宿；selected 酒店只作为选点和路线锚点，anchor_days 表示这些天从酒店出发并返回酒店，未列出的天不强制回酒店。
+- distance_to_lodging_km 是候选到酒店的直线距离，仅作参考，不改变候选集。
+- guide_score/guide_note 来自公开攻略，只是同等条件下的偏好，不得覆盖必去、避开、开放时间和预算。
+- 不得把酒店当作景点，也不得输出候选集以外的 poi_id。
+{{end}}
 为 {{.Days}} 天各挑选 3-5 个地点，输出 DraftPlan JSON。规则：
 - poi_id 必须逐字复制候选列表中的 id，禁止编造或改写。
 - type 只能是 "poi" 或 "meal"；餐饮开启时每天至少安排一个 meal。

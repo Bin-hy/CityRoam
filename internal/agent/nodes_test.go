@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"trippilot/internal/domain"
 )
 
 type llmCall struct {
@@ -186,6 +188,116 @@ func TestParseNode(t *testing.T) {
 		var nodeErr *NodeError
 		if !errors.As(err, &nodeErr) || nodeErr.Code != "parse_decode_failed" {
 			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+func TestConstraintSchema(t *testing.T) {
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(ConstraintSchema, &schema); err != nil {
+		t.Fatalf("decode schema: %v", err)
+	}
+	var budget struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(schema.Properties["budget"], &budget); err != nil {
+		t.Fatalf("decode budget: %v", err)
+	}
+	if _, ok := budget.Properties["include_lodging"]; !ok {
+		t.Fatal("budget.include_lodging missing from schema")
+	}
+	var lodging struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(schema.Properties["lodging"], &lodging); err != nil {
+		t.Fatalf("decode lodging: %v", err)
+	}
+	for _, field := range []string{"mentioned", "hotels", "area", "max_price_per_night_yuan"} {
+		if _, ok := lodging.Properties[field]; !ok {
+			t.Fatalf("lodging.%s missing from schema", field)
+		}
+	}
+
+	var decoded domain.ConstraintSet
+	payload := `{"city":"beijing","days":2,"budget":{"include_lodging":false},"lodging":{"mentioned":true,"hotels":[" 全季 "],"area":" 王府井 ","max_price_per_night_yuan":600}}`
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("decode constraints: %v", err)
+	}
+	decoded = normalizeConstraints(decoded).ApplyDefaults()
+	if !decoded.Lodging.Mentioned || len(decoded.Lodging.Hotels) != 1 || decoded.Lodging.Hotels[0] != "全季" {
+		t.Fatalf("lodging = %+v", decoded.Lodging)
+	}
+	if decoded.Lodging.Area != "王府井" || decoded.Lodging.MaxPricePerNightYuan != 600 {
+		t.Fatalf("lodging = %+v", decoded.Lodging)
+	}
+	if decoded.LodgingIncluded() {
+		t.Fatal("include_lodging=false was overwritten by defaults")
+	}
+
+	var defaults domain.ConstraintSet
+	if err := json.Unmarshal([]byte(`{"city":"beijing","days":1}`), &defaults); err != nil {
+		t.Fatalf("decode defaults: %v", err)
+	}
+	defaults = defaults.ApplyDefaults()
+	if defaults.Budget.IncludeLodging != nil || !defaults.LodgingIncluded() {
+		t.Fatalf("default include_lodging = %+v", defaults.Budget.IncludeLodging)
+	}
+}
+
+func TestNormalizeLodging(t *testing.T) {
+	t.Run("trims, dedupes and clears invalid price", func(t *testing.T) {
+		got := normalizeConstraints(domain.ConstraintSet{
+			Lodging: domain.LodgingConstraint{
+				Mentioned:            true,
+				Hotels:               []string{" 全季 ", "", "全季", " 王府井 "},
+				Area:                 " 王府井 ",
+				MaxPricePerNightYuan: -100,
+			},
+		})
+		if len(got.Lodging.Hotels) != 2 || got.Lodging.Hotels[0] != "全季" || got.Lodging.Hotels[1] != "王府井" {
+			t.Fatalf("hotels = %v", got.Lodging.Hotels)
+		}
+		if got.Lodging.Area != "王府井" || got.Lodging.MaxPricePerNightYuan != 0 {
+			t.Fatalf("lodging = %+v", got.Lodging)
+		}
+	})
+
+	t.Run("clears fields when lodging is not mentioned", func(t *testing.T) {
+		got := normalizeConstraints(domain.ConstraintSet{
+			Lodging: domain.LodgingConstraint{
+				Mentioned:            false,
+				Hotels:               []string{"残留"},
+				Area:                 "残留",
+				MaxPricePerNightYuan: 300,
+			},
+		})
+		if got.Lodging.Hotels != nil || got.Lodging.Area != "" || got.Lodging.MaxPricePerNightYuan != 0 {
+			t.Fatalf("lodging = %+v", got.Lodging)
+		}
+	})
+
+	t.Run("keeps the include_lodging tri-state", func(t *testing.T) {
+		yes, no := true, false
+		cases := []struct {
+			name string
+			in   *bool
+			want *bool
+		}{
+			{name: "nil", in: nil, want: nil},
+			{name: "true", in: &yes, want: &yes},
+			{name: "false", in: &no, want: &no},
+		}
+		for _, tc := range cases {
+			got := normalizeConstraints(domain.ConstraintSet{Budget: domain.BudgetConstraint{IncludeLodging: tc.in}})
+			got = got.ApplyDefaults()
+			switch {
+			case tc.want == nil && got.Budget.IncludeLodging != nil:
+				t.Fatalf("%s: got %v", tc.name, *got.Budget.IncludeLodging)
+			case tc.want != nil && (got.Budget.IncludeLodging == nil || *got.Budget.IncludeLodging != *tc.want):
+				t.Fatalf("%s: got %v", tc.name, got.Budget.IncludeLodging)
+			}
 		}
 	})
 }

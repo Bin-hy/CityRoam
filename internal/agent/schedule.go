@@ -9,7 +9,7 @@ import (
 )
 
 type Scheduler interface {
-	Build(draft domain.DraftPlan, constraints domain.ConstraintSet, pois map[string]domain.POI, routes domain.RouteProvider) (domain.Itinerary, error)
+	Build(draft domain.DraftPlan, constraints domain.ConstraintSet, pois map[string]domain.POI, routes domain.RouteProvider, options domain.ScheduleOptions) (domain.Itinerary, error)
 }
 
 type Validator interface {
@@ -39,12 +39,13 @@ type ScheduleInput struct {
 	Constraints domain.ConstraintSet
 	Draft       domain.DraftPlan
 	POIs        map[string]domain.POI
+	Research    *domain.ResearchBrief
 }
 
 // Schedule turns a draft into exact times, transit and costs, then publishes
 // plan.drafted.
 func (n *Nodes) Schedule(ctx context.Context, in ScheduleInput) (domain.Itinerary, error) {
-	plan, err := n.scheduler.Build(in.Draft, in.Constraints, in.POIs, n.routes)
+	plan, err := n.scheduler.Build(in.Draft, in.Constraints, in.POIs, n.routes, scheduleOptions(in.Research))
 	if err != nil {
 		return domain.Itinerary{}, &NodeError{Code: "schedule_failed", Message: "排期失败", Err: err}
 	}
@@ -53,6 +54,18 @@ func (n *Nodes) Schedule(ctx context.Context, in ScheduleInput) (domain.Itinerar
 	}
 	n.logger.Info("plan scheduled", "run_id", in.RunID, "days", len(plan.Days))
 	return plan, nil
+}
+
+func scheduleOptions(research *domain.ResearchBrief) domain.ScheduleOptions {
+	if research == nil || research.Accommodation == nil || research.Accommodation.Selected == nil {
+		return domain.ScheduleOptions{}
+	}
+	accommodation := research.Accommodation
+	return domain.ScheduleOptions{Lodging: &domain.LodgingAnchor{
+		Hotel:           *accommodation.Selected,
+		AnchorDays:      append([]int(nil), accommodation.AnchorDays...),
+		IncludeInBudget: accommodation.IncludeInBudget,
+	}}
 }
 
 type ValidateInput struct {

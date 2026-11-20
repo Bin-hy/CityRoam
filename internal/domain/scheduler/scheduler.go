@@ -27,6 +27,7 @@ func (s *Scheduler) Build(
 	constraints domain.ConstraintSet,
 	pois map[string]domain.POI,
 	routes domain.RouteProvider,
+	options domain.ScheduleOptions,
 ) (domain.Itinerary, error) {
 	constraints = constraints.ApplyDefaults()
 	dayStart, err := domain.ParseClock(constraints.Daily.StartTime)
@@ -36,6 +37,7 @@ func (s *Scheduler) Build(
 
 	itinerary := domain.Itinerary{City: constraints.City}
 	ctx := context.Background()
+	anchorDays, hotelPOI := lodgingAnchor(options.Lodging, len(draft.Days))
 
 	for dayIndex, draftDay := range draft.Days {
 		blocks := make([]domain.Block, 0, len(draftDay.Items)*2)
@@ -47,6 +49,29 @@ func (s *Scheduler) Build(
 		nextBlockID := func() string {
 			blockSeq++
 			return fmt.Sprintf("d%d-b%d", dayIndex+1, blockSeq)
+		}
+		_, anchored := anchorDays[dayIndex]
+		anchored = anchored && len(draftDay.Items) > 0
+
+		if anchored {
+			firstPOI, found := pois[draftDay.Items[0].POIID]
+			if !found {
+				return domain.Itinerary{}, fmt.Errorf(
+					"scheduler: day %d references unknown POI %q", dayIndex+1, draftDay.Items[0].POIID)
+			}
+			transport := anchorTransport(ctx, routes, hotelPOI, firstPOI)
+			blocks = append(blocks, domain.Block{
+				ID:          fmt.Sprintf("d%d-hotel-start", dayIndex+1),
+				Type:        domain.BlockTypeTransit,
+				Title:       "从酒店出发",
+				Start:       domain.FormatClock(current),
+				End:         domain.FormatClock(current + transport.DurationMin),
+				DurationMin: transport.DurationMin,
+				CostYuan:    transport.CostYuan,
+				Transport:   &transport,
+				Notes:       "起终点交通",
+			})
+			current += transport.DurationMin
 		}
 
 		for _, item := range draftDay.Items {
@@ -145,6 +170,22 @@ func (s *Scheduler) Build(
 			hasPrevious = true
 		}
 
+		if anchored {
+			transport := anchorTransport(ctx, routes, previousPOI, hotelPOI)
+			blocks = append(blocks, domain.Block{
+				ID:          fmt.Sprintf("d%d-hotel-end", dayIndex+1),
+				Type:        domain.BlockTypeTransit,
+				Title:       "返回酒店",
+				Start:       domain.FormatClock(current),
+				End:         domain.FormatClock(current + transport.DurationMin),
+				DurationMin: transport.DurationMin,
+				CostYuan:    transport.CostYuan,
+				Transport:   &transport,
+				Notes:       "起终点交通",
+			})
+			current += transport.DurationMin
+		}
+
 		dayEnd := domain.FormatClock(dayStart)
 		if len(blocks) > 0 {
 			dayEnd = blocks[len(blocks)-1].End
@@ -163,7 +204,90 @@ func (s *Scheduler) Build(
 		itinerary.Totals.WalkingKM += walkingMeters / 1000
 	}
 
+	if options.Lodging != nil {
+		itinerary.Lodging = lodgingSummary(options.Lodging, len(itinerary.Days))
+		itinerary.Totals.LodgingYuan = itinerary.Lodging.TotalYuan
+	}
+
 	return itinerary, nil
+}
+
+func lodgingAnchor(anchor *domain.LodgingAnchor, days int) (map[int]struct{}, domain.POI) {
+	if anchor == nil {
+		return nil, domain.POI{}
+	}
+	anchors := make(map[int]struct{})
+	for _, day := range domain.NormalizeAnchorDays(anchor.AnchorDays, days) {
+		anchors[day] = struct{}{}
+	}
+	id := anchor.Hotel.ID
+	if id == "" {
+		id = "hotel:" + anchor.Hotel.Name
+	}
+	return anchors, domain.POI{
+		ID:   id,
+		Name: anchor.Hotel.Name,
+		City: anchor.Hotel.City,
+		Lat:  anchor.Hotel.Lat,
+		Lng:  anchor.Hotel.Lng,
+	}
+}
+
+// anchorTransport prefers the route provider and falls back to a straight-line
+// estimate so a day anchored at the hotel never fails to schedule.
+func anchorTransport(ctx context.Context, routes domain.RouteProvider, from, to domain.POI) domain.Transport {
+	mode := chooseMode(from, to)
+	if routes != nil {
+		if transport, err := routes.Route(ctx, from, to, mode); err == nil {
+			normalizeTransport(&transport, from, to, mode)
+			return transport
+		}
+	}
+	distance := distanceMeters(from, to)
+	speed := 80.0
+	cost := 0
+	if mode != domain.TransportWalk {
+		speed = 250
+		cost = estimatedTransitYuan
+	}
+	minutes := int(math.Ceil(distance / speed))
+	if minutes < 1 {
+		minutes = 1
+	}
+	return domain.Transport{
+		Mode:        mode,
+		FromPOIID:   from.ID,
+		ToPOIID:     to.ID,
+		DistanceM:   int(math.Round(distance)),
+		DurationMin: minutes,
+		CostYuan:    cost,
+		Estimated:   true,
+	}
+}
+
+func lodgingSummary(anchor *domain.LodgingAnchor, days int) *domain.LodgingSummary {
+	nights := days - 1
+	if nights < 0 {
+		nights = 0
+	}
+	nightly := anchor.Hotel.PricePerNightYuan
+	if nightly < 0 {
+		nightly = 0
+	}
+	total := 0
+	if nights > 0 && nightly <= int(^uint(0)>>1)/nights {
+		total = nightly * nights
+	}
+	return &domain.LodgingSummary{
+		Hotel:           anchor.Hotel,
+		Nights:          nights,
+		NightlyYuan:     nightly,
+		TotalYuan:       total,
+		AnchorDays:      domain.NormalizeAnchorDays(anchor.AnchorDays, days),
+		IncludeInBudget: anchor.IncludeInBudget,
+		PriceEstimated:  anchor.Hotel.PriceEstimated || nightly == 0,
+		Source:          anchor.Hotel.Provider,
+	}
 }
 
 func itemDuration(item domain.DraftItem, poi domain.POI) (int, error) {

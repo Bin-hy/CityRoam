@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ type DraftInput struct {
 	RunID       string
 	Constraints domain.ConstraintSet
 	Candidates  []domain.POI
+	Research    *domain.ResearchBrief
 }
 
 type DraftOutput struct {
@@ -30,14 +32,17 @@ type DraftOutput struct {
 
 // promptCandidate is the compact candidate shape shown to the LLM.
 type promptCandidate struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	Category         string   `json:"category"`
-	Area             string   `json:"area,omitempty"`
-	Outdoor          bool     `json:"outdoor"`
-	SuggestedMinutes int      `json:"suggested_minutes"`
-	TicketYuan       *int     `json:"ticket_yuan,omitempty"`
-	Tags             []string `json:"tags,omitempty"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	Category            string   `json:"category"`
+	Area                string   `json:"area,omitempty"`
+	Outdoor             bool     `json:"outdoor"`
+	SuggestedMinutes    int      `json:"suggested_minutes"`
+	TicketYuan          *int     `json:"ticket_yuan,omitempty"`
+	Tags                []string `json:"tags,omitempty"`
+	DistanceToLodgingKM *float64 `json:"distance_to_lodging_km,omitempty"`
+	GuideScore          float64  `json:"guide_score,omitempty"`
+	GuideNote           string   `json:"guide_note,omitempty"`
 }
 
 // Draft asks the LLM to pick only candidate IDs. Unknown IDs or missing meals
@@ -48,23 +53,13 @@ func (n *Nodes) Draft(ctx context.Context, in DraftInput) (DraftOutput, error) {
 	}
 
 	pois := make(map[string]domain.POI, len(in.Candidates))
-	compact := make([]promptCandidate, 0, len(in.Candidates))
 	for _, poi := range in.Candidates {
 		if _, dup := pois[poi.ID]; dup {
 			continue
 		}
 		pois[poi.ID] = poi
-		compact = append(compact, promptCandidate{
-			ID:               poi.ID,
-			Name:             poi.Name,
-			Category:         poi.Category,
-			Area:             poi.Area,
-			Outdoor:          poi.Outdoor,
-			SuggestedMinutes: poi.SuggestedMinutes,
-			TicketYuan:       poi.TicketYuan,
-			Tags:             poi.Tags,
-		})
 	}
+	compact := draftPromptCandidates(in.Candidates, in.Research)
 
 	constraintsJSON, err := json.Marshal(in.Constraints)
 	if err != nil {
@@ -75,9 +70,18 @@ func (n *Nodes) Draft(ctx context.Context, in DraftInput) (DraftOutput, error) {
 		return DraftOutput{}, &NodeError{Code: "encode_failed", Message: "编码候选失败", Err: err}
 	}
 
+	var researchJSON json.RawMessage
+	if in.Research != nil {
+		researchJSON, err = json.Marshal(in.Research)
+		if err != nil {
+			return DraftOutput{}, &NodeError{Code: "encode_failed", Message: "编码研究结果失败", Err: err}
+		}
+	}
+
 	basePrompt, err := RenderPrompt("draft", DraftPromptData{
 		Constraints: constraintsJSON,
 		Candidates:  candidatesJSON,
+		Research:    researchJSON,
 		Days:        in.Constraints.Days,
 	})
 	if err != nil {
@@ -152,6 +156,70 @@ func validateDayItems(dayIndex int, items []domain.DraftItem, mealsEnabled bool,
 		issues = append(issues, fmt.Sprintf("第 %d 天缺少餐饮安排", dayIndex+1))
 	}
 	return issues
+}
+
+func draftPromptCandidates(candidates []domain.POI, research *domain.ResearchBrief) []promptCandidate {
+	var lodging *domain.Hotel
+	if research != nil && research.Accommodation != nil {
+		lodging = research.Accommodation.Selected
+	}
+	guides := guideSignalsByPOI(research)
+	seen := make(map[string]struct{}, len(candidates))
+	out := make([]promptCandidate, 0, len(candidates))
+	for _, poi := range candidates {
+		if _, dup := seen[poi.ID]; dup {
+			continue
+		}
+		seen[poi.ID] = struct{}{}
+		candidate := promptCandidate{
+			ID:               poi.ID,
+			Name:             poi.Name,
+			Category:         poi.Category,
+			Area:             poi.Area,
+			Outdoor:          poi.Outdoor,
+			SuggestedMinutes: poi.SuggestedMinutes,
+			TicketYuan:       poi.TicketYuan,
+			Tags:             poi.Tags,
+		}
+		if lodging != nil {
+			distance := haversineKM(poi.Lat, poi.Lng, lodging.Lat, lodging.Lng)
+			candidate.DistanceToLodgingKM = &distance
+		}
+		if signal, ok := guides[poi.ID]; ok {
+			candidate.GuideScore = signal.Weight
+			candidate.GuideNote = signal.Note
+		}
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func guideSignalsByPOI(research *domain.ResearchBrief) map[string]domain.GuideSignal {
+	if research == nil || len(research.Guides) == 0 {
+		return nil
+	}
+	out := make(map[string]domain.GuideSignal, len(research.Guides))
+	for _, signal := range research.Guides {
+		if signal.POIID == "" {
+			continue
+		}
+		existing, found := out[signal.POIID]
+		if !found || signal.Weight > existing.Weight {
+			out[signal.POIID] = signal
+		}
+	}
+	return out
+}
+
+func haversineKM(lat1, lng1, lat2, lng2 float64) float64 {
+	const earthRadiusKM = 6371.0
+	phi1 := lat1 * math.Pi / 180
+	phi2 := lat2 * math.Pi / 180
+	dPhi := phi2 - phi1
+	dLambda := (lng2 - lng1) * math.Pi / 180
+	h := math.Sin(dPhi/2)*math.Sin(dPhi/2) +
+		math.Cos(phi1)*math.Cos(phi2)*math.Sin(dLambda/2)*math.Sin(dLambda/2)
+	return 2 * earthRadiusKM * math.Asin(math.Sqrt(h))
 }
 
 func assignDates(draft *domain.DraftPlan, start time.Time) {

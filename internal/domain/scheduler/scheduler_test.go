@@ -26,7 +26,7 @@ func TestSchedulerStart(t *testing.T) {
 			Items: []domain.DraftItem{{POIID: museum.ID, Type: domain.ItemTypePOI, DurationMin: 180}},
 		}}}
 
-		plan, err := New().Build(draft, constraints, pois, nil)
+		plan, err := New().Build(draft, constraints, pois, nil, domain.ScheduleOptions{})
 		if err != nil {
 			t.Fatalf("Build() error = %v", err)
 		}
@@ -69,7 +69,7 @@ func TestSchedulerStart(t *testing.T) {
 			Items: []domain.DraftItem{{POIID: museum.ID, Type: domain.ItemTypePOI, DurationMin: 90}},
 		}}}
 
-		plan, err := New().Build(draft, constraints, pois, nil)
+		plan, err := New().Build(draft, constraints, pois, nil, domain.ScheduleOptions{})
 		if err != nil {
 			t.Fatalf("Build() error = %v", err)
 		}
@@ -104,7 +104,7 @@ func TestSchedulerStart(t *testing.T) {
 			Items: []domain.DraftItem{{POIID: street.ID, Type: domain.ItemTypePOI, DurationMin: 90}},
 		}}}
 
-		plan, err := New().Build(draft, constraints, pois, nil)
+		plan, err := New().Build(draft, constraints, pois, nil, domain.ScheduleOptions{})
 		if err != nil {
 			t.Fatalf("Build() error = %v", err)
 		}
@@ -146,7 +146,7 @@ func TestSchedulerTransit(t *testing.T) {
 		},
 	}}}
 
-	plan, err := New().Build(draft, constraints, pois, routes)
+	plan, err := New().Build(draft, constraints, pois, routes, domain.ScheduleOptions{})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -228,7 +228,7 @@ func TestSchedulerCost(t *testing.T) {
 		},
 	}}}
 
-	plan, err := New().Build(draft, constraints, pois, routes)
+	plan, err := New().Build(draft, constraints, pois, routes, domain.ScheduleOptions{})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -277,7 +277,7 @@ func TestSchedulerErrors(t *testing.T) {
 	missing := domain.DraftPlan{Days: []domain.DraftDay{{
 		Items: []domain.DraftItem{{POIID: "missing", DurationMin: 60}},
 	}}}
-	if _, err := New().Build(missing, constraints, nil, nil); err == nil {
+	if _, err := New().Build(missing, constraints, nil, nil, domain.ScheduleOptions{}); err == nil {
 		t.Fatal("Build() error = nil for unknown POI")
 	}
 
@@ -291,9 +291,178 @@ func TestSchedulerErrors(t *testing.T) {
 			{POIID: "b", DurationMin: 60},
 		},
 	}}}
-	if _, err := New().Build(multiStop, constraints, pois, nil); err == nil {
+	if _, err := New().Build(multiStop, constraints, pois, nil, domain.ScheduleOptions{}); err == nil {
 		t.Fatal("Build() error = nil without a route provider")
 	}
+}
+
+func TestSchedulerLodgingAnchor(t *testing.T) {
+	a := testPOI("a", "A", "东城", 39.9163, 116.3972, nil, 60)
+	b := testPOI("b", "B", "东城", 39.9170, 116.3980, nil, 60)
+	pois := map[string]domain.POI{a.ID: a, b.ID: b}
+	hotel := domain.Hotel{ID: "h1", Name: "测试酒店", Lat: 39.9163, Lng: 116.3972, Provider: "flyai"}
+	routes := &fakeRouteProvider{routes: map[string]domain.Transport{
+		"h1->a": {DurationMin: 8, DistanceM: 600, CostYuan: 0},
+		"a->h1": {DurationMin: 10, DistanceM: 700, CostYuan: 0},
+	}}
+	constraints := domain.ConstraintSet{
+		City:  "beijing",
+		Daily: domain.DailyConstraint{StartTime: "09:00", EndTime: "21:00", MaxHours: 12},
+	}
+	draft := domain.DraftPlan{Days: []domain.DraftDay{
+		{Date: "2026-11-16", Items: []domain.DraftItem{{POIID: a.ID, Type: domain.ItemTypePOI, DurationMin: 60}}},
+		{Date: "2026-11-17", Items: []domain.DraftItem{{POIID: b.ID, Type: domain.ItemTypePOI, DurationMin: 60}}},
+	}}
+	options := domain.ScheduleOptions{Lodging: &domain.LodgingAnchor{
+		Hotel: hotel, AnchorDays: []int{0}, IncludeInBudget: true,
+	}}
+
+	plan, err := New().Build(draft, constraints, pois, routes, options)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	day := plan.Days[0]
+	if len(day.Blocks) != 3 {
+		t.Fatalf("anchored blocks = %d, want 3: %+v", len(day.Blocks), day.Blocks)
+	}
+	start, visit, end := day.Blocks[0], day.Blocks[1], day.Blocks[2]
+	if start.ID != "d1-hotel-start" || start.Type != domain.BlockTypeTransit {
+		t.Fatalf("start block = %+v", start)
+	}
+	if start.Start != "09:00" || start.End != "09:08" || start.DurationMin != 8 {
+		t.Fatalf("start window = %s-%s/%d, want 09:00-09:08/8", start.Start, start.End, start.DurationMin)
+	}
+	if start.Transport == nil || start.Transport.FromPOIID != "h1" || start.Transport.ToPOIID != "a" {
+		t.Fatalf("start transport = %+v", start.Transport)
+	}
+	if visit.Start != "09:08" || visit.End != "10:08" {
+		t.Fatalf("visit = %s-%s, want 09:08-10:08", visit.Start, visit.End)
+	}
+	if end.ID != "d1-hotel-end" || end.Start != "10:08" || end.End != "10:18" || end.DurationMin != 10 {
+		t.Fatalf("end block = %+v, want d1-hotel-end 10:08-10:18/10", end)
+	}
+	if day.EndTime != "10:18" {
+		t.Fatalf("day end = %s, want 10:18", day.EndTime)
+	}
+
+	second := plan.Days[1]
+	if len(second.Blocks) != 1 || second.Blocks[0].Start != "09:00" {
+		t.Fatalf("non-anchored blocks = %+v, want one 09:00 POI", second.Blocks)
+	}
+	if plan.Totals.POICount != 2 {
+		t.Fatalf("POICount = %d, want 2 (transit excluded)", plan.Totals.POICount)
+	}
+	if len(plan.Lodging.AnchorDays) != 1 || plan.Lodging.AnchorDays[0] != 0 {
+		t.Fatalf("anchor days = %+v, want [0]", plan.Lodging.AnchorDays)
+	}
+
+	t.Run("missing route falls back to estimate", func(t *testing.T) {
+		far := testPOI("far", "远处", "朝阳", 39.9900, 116.4700, nil, 60)
+		plan, err := New().Build(
+			domain.DraftPlan{Days: []domain.DraftDay{{
+				Date:  "2026-11-16",
+				Items: []domain.DraftItem{{POIID: far.ID, Type: domain.ItemTypePOI, DurationMin: 60}},
+			}}},
+			constraints, map[string]domain.POI{far.ID: far}, nil,
+			domain.ScheduleOptions{Lodging: &domain.LodgingAnchor{Hotel: hotel, AnchorDays: []int{0}}},
+		)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		blocks := plan.Days[0].Blocks
+		if len(blocks) != 3 {
+			t.Fatalf("blocks = %d, want 3: %+v", len(blocks), blocks)
+		}
+		for _, block := range []domain.Block{blocks[0], blocks[2]} {
+			if block.Transport == nil || !block.Transport.Estimated {
+				t.Fatalf("fallback transport = %+v, want estimated", block.Transport)
+			}
+			if block.DurationMin < 1 {
+				t.Fatalf("fallback duration = %d, want >= 1", block.DurationMin)
+			}
+		}
+		if plan.Totals.POICount != 1 {
+			t.Fatalf("POICount = %d, want 1", plan.Totals.POICount)
+		}
+	})
+}
+
+func TestSchedulerLodgingTotals(t *testing.T) {
+	a := testPOI("a", "A", "东城", 39.9163, 116.3972, nil, 60)
+	b := testPOI("b", "B", "东城", 39.9170, 116.3980, nil, 60)
+	pois := map[string]domain.POI{a.ID: a, b.ID: b}
+	constraints := domain.ConstraintSet{
+		City:  "beijing",
+		Daily: domain.DailyConstraint{StartTime: "09:00", EndTime: "21:00", MaxHours: 12},
+	}
+	draft := domain.DraftPlan{Days: []domain.DraftDay{
+		{Date: "2026-11-16", Items: []domain.DraftItem{{POIID: a.ID, Type: domain.ItemTypePOI, DurationMin: 60}}},
+		{Date: "2026-11-17", Items: []domain.DraftItem{{POIID: b.ID, Type: domain.ItemTypePOI, DurationMin: 60}}},
+	}}
+
+	t.Run("two days means one night", func(t *testing.T) {
+		hotel := domain.Hotel{ID: "h1", Name: "酒店", Lat: a.Lat, Lng: a.Lng, PricePerNightYuan: 500, Provider: "flyai"}
+		options := domain.ScheduleOptions{Lodging: &domain.LodgingAnchor{
+			Hotel: hotel, AnchorDays: []int{0}, IncludeInBudget: true,
+		}}
+		plan, err := New().Build(draft, constraints, pois, nil, options)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		lodging := plan.Lodging
+		if lodging == nil {
+			t.Fatal("Lodging = nil")
+		}
+		if lodging.Nights != 1 || lodging.NightlyYuan != 500 || lodging.TotalYuan != 500 {
+			t.Fatalf("lodging = %+v, want 1 night x 500 = 500", lodging)
+		}
+		if plan.Totals.LodgingYuan != 500 {
+			t.Fatalf("Totals.LodgingYuan = %d, want 500", plan.Totals.LodgingYuan)
+		}
+		if plan.Totals.CostYuan != 0 {
+			t.Fatalf("Totals.CostYuan = %d, want 0 (lodging is separate)", plan.Totals.CostYuan)
+		}
+		if !lodging.IncludeInBudget || lodging.PriceEstimated || lodging.Source != "flyai" {
+			t.Fatalf("lodging flags = %+v", lodging)
+		}
+		if len(lodging.AnchorDays) != 1 || lodging.AnchorDays[0] != 0 {
+			t.Fatalf("AnchorDays = %+v, want [0]", lodging.AnchorDays)
+		}
+	})
+
+	t.Run("missing price is estimated", func(t *testing.T) {
+		hotel := domain.Hotel{ID: "h1", Name: "酒店", Lat: a.Lat, Lng: a.Lng, Provider: "flyai"}
+		options := domain.ScheduleOptions{Lodging: &domain.LodgingAnchor{Hotel: hotel, IncludeInBudget: true}}
+		plan, err := New().Build(draft, constraints, pois, nil, options)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if plan.Lodging.Nights != 1 || plan.Lodging.TotalYuan != 0 || !plan.Lodging.PriceEstimated {
+			t.Fatalf("lodging = %+v, want 1 night, 0 yuan, estimated", plan.Lodging)
+		}
+	})
+
+	t.Run("single day has no nights", func(t *testing.T) {
+		hotel := domain.Hotel{ID: "h1", Name: "酒店", Lat: a.Lat, Lng: a.Lng, PricePerNightYuan: 500}
+		options := domain.ScheduleOptions{Lodging: &domain.LodgingAnchor{Hotel: hotel}}
+		plan, err := New().Build(domain.DraftPlan{Days: draft.Days[:1]}, constraints, pois, nil, options)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if plan.Lodging.Nights != 0 || plan.Lodging.TotalYuan != 0 || plan.Totals.LodgingYuan != 0 {
+			t.Fatalf("lodging = %+v totals = %+v, want zero nights", plan.Lodging, plan.Totals)
+		}
+	})
+
+	t.Run("no lodging options keeps v1 plan", func(t *testing.T) {
+		plan, err := New().Build(draft, constraints, pois, nil, domain.ScheduleOptions{})
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if plan.Lodging != nil {
+			t.Fatalf("Lodging = %+v, want nil", plan.Lodging)
+		}
+	})
 }
 
 type fakeRouteProvider struct {

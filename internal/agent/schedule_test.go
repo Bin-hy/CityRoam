@@ -14,7 +14,7 @@ type fakeScheduler struct {
 	lastDraft domain.DraftPlan
 }
 
-func (f *fakeScheduler) Build(draft domain.DraftPlan, constraints domain.ConstraintSet, pois map[string]domain.POI, routes domain.RouteProvider) (domain.Itinerary, error) {
+func (f *fakeScheduler) Build(draft domain.DraftPlan, constraints domain.ConstraintSet, pois map[string]domain.POI, routes domain.RouteProvider, options domain.ScheduleOptions) (domain.Itinerary, error) {
 	f.lastDraft = draft
 	if f.err != nil {
 		return domain.Itinerary{}, f.err

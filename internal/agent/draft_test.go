@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -194,6 +195,87 @@ func TestDraftNode(t *testing.T) {
 		var nodeErr *NodeError
 		if !errors.As(err, &nodeErr) || nodeErr.Code != "draft_llm_failed" {
 			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+func TestDraftResearchFields(t *testing.T) {
+	base := domain.POI{ID: "p-0", City: "beijing", Name: "近酒店", Lat: 39.90, Lng: 116.40, CoordSystem: domain.CoordSystemGCJ02}
+	far := domain.POI{ID: "p-1", City: "beijing", Name: "远景点", Lat: 40.00, Lng: 116.50, CoordSystem: domain.CoordSystemGCJ02}
+	candidates := []domain.POI{base, far}
+
+	t.Run("no research keeps v1 fields empty", func(t *testing.T) {
+		got := draftPromptCandidates(candidates, nil)
+		if len(got) != 2 {
+			t.Fatalf("candidates = %+v", got)
+		}
+		for _, candidate := range got {
+			if candidate.DistanceToLodgingKM != nil || candidate.GuideScore != 0 || candidate.GuideNote != "" {
+				t.Fatalf("candidate = %+v", candidate)
+			}
+		}
+	})
+
+	t.Run("hotel and guides annotate the same candidate set", func(t *testing.T) {
+		research := &domain.ResearchBrief{
+			Accommodation: &domain.AccommodationBrief{Selected: &domain.Hotel{ID: "h1", Name: "酒店", Lat: 39.90, Lng: 116.40}},
+			Guides:        []domain.GuideSignal{{POIID: "p-1", Weight: 0.71, Note: "攻略推荐"}},
+		}
+		got := draftPromptCandidates(candidates, research)
+		if len(got) != 2 {
+			t.Fatalf("candidates = %+v", got)
+		}
+		if got[0].DistanceToLodgingKM == nil || *got[0].DistanceToLodgingKM != 0 {
+			t.Fatalf("near distance = %v", got[0].DistanceToLodgingKM)
+		}
+		if got[0].GuideScore != 0 || got[0].GuideNote != "" {
+			t.Fatalf("near candidate = %+v", got[0])
+		}
+		want := haversineKM(far.Lat, far.Lng, 39.90, 116.40)
+		if got[1].DistanceToLodgingKM == nil || math.Abs(*got[1].DistanceToLodgingKM-want) > 1e-9 {
+			t.Fatalf("far distance = %v want %v", got[1].DistanceToLodgingKM, want)
+		}
+		if got[1].GuideScore != 0.71 || got[1].GuideNote != "攻略推荐" {
+			t.Fatalf("far candidate = %+v", got[1])
+		}
+	})
+
+	t.Run("missing selection does not add distance", func(t *testing.T) {
+		research := &domain.ResearchBrief{Accommodation: &domain.AccommodationBrief{Mentioned: true}}
+		got := draftPromptCandidates(candidates, research)
+		for _, candidate := range got {
+			if candidate.DistanceToLodgingKM != nil {
+				t.Fatalf("candidate = %+v", candidate)
+			}
+		}
+	})
+
+	t.Run("prompt includes the research section only when present", func(t *testing.T) {
+		constraints := domain.ConstraintSet{City: "beijing", Days: 1, StartDate: "2026-12-01"}
+		reply := draftReply([]domain.DraftItem{item("p-0", "poi", 120)})
+		plain := &fakeLLM{reply: reply}
+		nodes := NewNodes(plain, &eventRecorder{}, WithNodeLogger(discardLogger()))
+		if _, err := nodes.Draft(context.Background(), DraftInput{Constraints: constraints, Candidates: candidates}); err != nil {
+			t.Fatalf("draft: %v", err)
+		}
+		if strings.Contains(plain.calls[0].prompt, "研究提示") || strings.Contains(plain.calls[0].prompt, "guide_score") {
+			t.Fatalf("prompt without research has research section:\n%s", plain.calls[0].prompt)
+		}
+
+		withResearch := &fakeLLM{reply: reply}
+		nodes = NewNodes(withResearch, &eventRecorder{}, WithNodeLogger(discardLogger()))
+		research := &domain.ResearchBrief{
+			Accommodation: &domain.AccommodationBrief{Selected: &domain.Hotel{ID: "h1", Lat: 39.9, Lng: 116.4}},
+			Guides:        []domain.GuideSignal{{POIID: "p-0", Weight: 0.5, Note: "参考"}},
+		}
+		if _, err := nodes.Draft(context.Background(), DraftInput{Constraints: constraints, Candidates: candidates, Research: research}); err != nil {
+			t.Fatalf("draft: %v", err)
+		}
+		prompt := withResearch.calls[0].prompt
+		for _, want := range []string{"研究提示", "anchor_days", "guide_score", `"distance_to_lodging_km"`} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("prompt missing %q:\n%s", want, prompt)
+			}
 		}
 	})
 }

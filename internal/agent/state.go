@@ -56,6 +56,7 @@ type TripState struct {
 	Research         *domain.ResearchBrief    `json:"research,omitempty"`
 	ResearchQuestion *domain.ResearchQuestion `json:"research_question,omitempty"`
 	ResolvedHotel    *domain.Hotel            `json:"resolved_hotel,omitempty"`
+	ConstraintPatch  *domain.ConstraintSet    `json:"constraint_patch,omitempty"`
 	Proposal         *AdjustmentProposal      `json:"proposal,omitempty"`
 	Previous         *domain.Itinerary        `json:"previous,omitempty"`
 	PreviousSeq      int                      `json:"previous_seq,omitempty"`

@@ -19,7 +19,7 @@ type draftScheduler struct {
 	mutate func(*domain.Itinerary)
 }
 
-func (s *draftScheduler) Build(draft domain.DraftPlan, constraints domain.ConstraintSet, pois map[string]domain.POI, _ domain.RouteProvider) (domain.Itinerary, error) {
+func (s *draftScheduler) Build(draft domain.DraftPlan, constraints domain.ConstraintSet, pois map[string]domain.POI, _ domain.RouteProvider, _ domain.ScheduleOptions) (domain.Itinerary, error) {
 	plan := domain.Itinerary{City: constraints.City}
 	for dayIndex, day := range draft.Days {
 		dayPlan := domain.DayPlan{Date: day.Date}
@@ -63,7 +63,7 @@ func adjustmentFixture(t *testing.T) (AdjustInput, *draftScheduler) {
 		{Date: "2026-11-21", Items: []domain.DraftItem{{POIID: "p1", Type: domain.ItemTypePOI, DurationMin: 90}}},
 	}}
 	scheduler := &draftScheduler{}
-	basePlan, err := scheduler.Build(draft, constraints, pois, nil)
+	basePlan, err := scheduler.Build(draft, constraints, pois, nil, domain.ScheduleOptions{})
 	if err != nil {
 		t.Fatalf("build base: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestAdjustmentKeepsUntouchedDaysWithLookup(t *testing.T) {
 		{Date: "2026-11-21", Items: []domain.DraftItem{{POIID: "p1", Type: domain.ItemTypePOI, DurationMin: 90}}},
 	}}
 	realScheduler := schedulerimpl.New()
-	basePlan, err := realScheduler.Build(draft, constraints, pois, nil)
+	basePlan, err := realScheduler.Build(draft, constraints, pois, nil, domain.ScheduleOptions{})
 	if err != nil {
 		t.Fatalf("build base: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestAdjustment(t *testing.T) {
 	t.Run("scheduler changes to untouched days are rejected", func(t *testing.T) {
 		in, _ := adjustmentFixture(t)
 		baseScheduler := &draftScheduler{}
-		basePlan, err := baseScheduler.Build(in.BaseDraft, in.Constraints, in.POIs, nil)
+		basePlan, err := baseScheduler.Build(in.BaseDraft, in.Constraints, in.POIs, nil, domain.ScheduleOptions{})
 		if err != nil {
 			t.Fatalf("base: %v", err)
 		}

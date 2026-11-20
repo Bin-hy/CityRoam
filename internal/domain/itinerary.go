@@ -52,6 +52,18 @@ func (d DraftPlan) POIIDs() []string {
 	return ids
 }
 
+// ScheduleOptions carries optional lodging anchors into the deterministic
+// scheduler. A nil Lodging means the v1 path.
+type ScheduleOptions struct {
+	Lodging *LodgingAnchor
+}
+
+type LodgingAnchor struct {
+	Hotel           Hotel
+	AnchorDays      []int
+	IncludeInBudget bool
+}
+
 type Itinerary struct {
 	City    string          `json:"city"`
 	Days    []DayPlan       `json:"days"`

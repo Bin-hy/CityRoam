@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"trippilot/internal/domain"
+	"trippilot/internal/domain/scheduler"
+	"trippilot/internal/domain/validator"
 )
 
 func graphPlan() domain.Itinerary {
@@ -166,6 +169,186 @@ func TestGraph(t *testing.T) {
 		types := events.types()
 		if countString(types, "repair.started") != 2 || countString(types, "repair.completed") != 2 {
 			t.Fatalf("events = %v", types)
+		}
+	})
+}
+
+func TestGraphReplan(t *testing.T) {
+	include := false
+	previous := graphPlan()
+
+	t.Run("patch fills missing critical fields", func(t *testing.T) {
+		llm := &fakeLLM{replies: []json.RawMessage{
+			json.RawMessage(`{"city":"","days":0,"lodging":{"mentioned":true}}`),
+			graphDraftReply(),
+		}}
+		events := &eventRecorder{}
+		nodes := graphNodes(llm, events, &fakeValidator{})
+		graph, err := NewGraph(context.Background(), nodes)
+		if err != nil {
+			t.Fatalf("new graph: %v", err)
+		}
+		patch := &domain.ConstraintSet{City: "beijing", Days: 1}
+		out, err := graph.Run(context.Background(), &TripState{
+			RunID: "run-replan-1", Input: "按新的约束重排", Mode: "replan",
+			ConstraintPatch: patch, Previous: &previous, PreviousSeq: 2,
+		})
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if out.Constraints.City != "beijing" || out.Constraints.Days != 1 {
+			t.Fatalf("constraints = %+v", out.Constraints)
+		}
+		if len(out.Missing) != 0 {
+			t.Fatalf("missing = %v, want none after patch", out.Missing)
+		}
+		if out.Snapshot == nil || out.Snapshot.Seq != 3 || out.Snapshot.Reason != "replan" {
+			t.Fatalf("snapshot = %+v", out.Snapshot)
+		}
+		if out.Previous == nil || len(out.Previous.Days) != 1 {
+			t.Fatalf("previous version lost: %+v", out.Previous)
+		}
+	})
+
+	t.Run("include_lodging false forces lodging off", func(t *testing.T) {
+		llm := &fakeLLM{replies: []json.RawMessage{
+			json.RawMessage(`{"city":"北京","days":1,"lodging":{"mentioned":true,"hotels":["全季"]}}`),
+			graphDraftReply(),
+		}}
+		nodes := graphNodes(llm, &eventRecorder{}, &fakeValidator{})
+		graph, err := NewGraph(context.Background(), nodes)
+		if err != nil {
+			t.Fatalf("new graph: %v", err)
+		}
+		patch := &domain.ConstraintSet{
+			City:    "beijing",
+			Days:    1,
+			Budget:  domain.BudgetConstraint{IncludeLodging: &include},
+			Lodging: domain.LodgingConstraint{Mentioned: false},
+		}
+		out, err := graph.Run(context.Background(), &TripState{
+			RunID: "run-replan-2", Input: "住宿不含在预算里", Mode: "replan",
+			ConstraintPatch: patch,
+		})
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if out.Constraints.Lodging.Mentioned {
+			t.Fatalf("lodging mentioned = true, want explicit false")
+		}
+		if out.Constraints.Budget.IncludeLodging == nil || *out.Constraints.Budget.IncludeLodging {
+			t.Fatalf("include_lodging = %v, want false", out.Constraints.Budget.IncludeLodging)
+		}
+		if out.Snapshot == nil || out.Snapshot.Reason != "replan" {
+			t.Fatalf("snapshot = %+v", out.Snapshot)
+		}
+	})
+}
+
+func TestGraphPlugins(t *testing.T) {
+	t.Run("hotel and guide flow through to plan", func(t *testing.T) {
+		llm := &fakeLLM{replies: []json.RawMessage{
+			json.RawMessage(`{"city":"北京","days":2,"lodging":{"mentioned":true}}`),
+			json.RawMessage(`{"days":[{"items":[{"poi_id":"poi-0","type":"poi","duration_min":90}]},{"items":[{"poi_id":"poi-1","type":"poi","duration_min":60}]}]}`),
+		}}
+		hotelTool := &fakeResearchTool{name: researchHotelTool, fn: func(context.Context, json.RawMessage) (json.RawMessage, error) {
+			return hotelToolOutput(t, domain.Hotel{
+				ID: "h1", Name: "测试酒店", Lat: 39.80, Lng: 116.30, PricePerNightYuan: 500, Provider: "flyai",
+			}), nil
+		}}
+		guideTool := &fakeResearchTool{name: researchGuideTool, fn: func(context.Context, json.RawMessage) (json.RawMessage, error) {
+			return guideToolOutput(t, guideResult{
+				Title: "北京攻略", URL: "https://example.com/guide", Summary: "推荐 poi-1",
+				SiteName: "小红书", Authority: 4, RerankScore: 0.8,
+			}), nil
+		}}
+		toolLLM := &fakeToolLLM{responses: []ToolCompletion{
+			{ToolCalls: []ToolCall{toolCall("c1", researchHotelTool, `{"query":"北京酒店"}`)}},
+			{ToolCalls: []ToolCall{toolCall("c2", researchGuideTool, `{"query":"北京攻略"}`)}},
+			{Content: briefJSON(t, `{"status":"ok","accommodation":{"mentioned":true,"selected":{"id":"h1","name":"测试酒店","lat":39.8,"lng":116.3,"price_per_night_yuan":500,"provider":"flyai"},"anchor_days":[0]},"guides":[{"poi_id":"poi-1","weight":0.7,"mentions":2,"note":"攻略推荐"}]}`)},
+		}}
+		events := &eventRecorder{}
+		nodes := graphNodesWithOptions(llm, events,
+			WithToolLLM(toolLLM),
+			WithResearchTools(hotelTool, guideTool),
+			WithScheduler(scheduler.New()),
+			WithValidator(validatorFunc(validator.Validate)),
+		)
+		graph, err := NewGraph(context.Background(), nodes)
+		if err != nil {
+			t.Fatalf("new graph: %v", err)
+		}
+		out, err := graph.Run(context.Background(), &TripState{RunID: "run-plugins", Input: "北京两天，预算800含住宿"})
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if out.Research == nil || out.Research.Status != domain.ResearchOK {
+			t.Fatalf("research = %+v", out.Research)
+		}
+		if len(out.Candidates) != 2 {
+			t.Fatalf("candidates = %d, want closed set of 2", len(out.Candidates))
+		}
+		if out.Plan.Lodging == nil {
+			t.Fatalf("plan lodging = nil: %+v", out.Plan)
+		}
+		lodging := out.Plan.Lodging
+		if lodging.Nights != 1 || lodging.TotalYuan != 500 || len(lodging.AnchorDays) != 1 || lodging.AnchorDays[0] != 0 {
+			t.Fatalf("lodging = %+v", lodging)
+		}
+		if out.Plan.Totals.LodgingYuan != 500 {
+			t.Fatalf("LodgingYuan = %d, want 500", out.Plan.Totals.LodgingYuan)
+		}
+		day := out.Plan.Days[0]
+		if len(day.Blocks) != 3 || day.Blocks[0].ID != "d1-hotel-start" || day.Blocks[2].ID != "d1-hotel-end" {
+			t.Fatalf("anchored day blocks = %+v", day.Blocks)
+		}
+		for _, violation := range out.Violations {
+			if violation.Code == "C5" {
+				t.Fatalf("unexpected C5: %+v", violation)
+			}
+		}
+		if out.Snapshot == nil || out.Snapshot.Research == nil {
+			t.Fatalf("snapshot research = %+v", out.Snapshot)
+		}
+		if len(llm.calls) < 2 {
+			t.Fatalf("llm calls = %d", len(llm.calls))
+		}
+		draftPrompt := llm.calls[1].prompt
+		for _, want := range []string{"guide_score", "distance_to_lodging_km", "anchor_days"} {
+			if !strings.Contains(draftPrompt, want) {
+				t.Fatalf("draft prompt missing %q:\n%s", want, draftPrompt)
+			}
+		}
+		if !containsString(events.types(), "research.completed") {
+			t.Fatalf("events = %v", events.types())
+		}
+	})
+
+	t.Run("no tools keeps v1 plan shape", func(t *testing.T) {
+		llm := &fakeLLM{replies: []json.RawMessage{
+			json.RawMessage(`{"city":"北京","days":1}`),
+			graphDraftReply(),
+		}}
+		nodes := graphNodesWithOptions(llm, &eventRecorder{},
+			WithScheduler(scheduler.New()),
+			WithValidator(validatorFunc(validator.Validate)),
+		)
+		graph, err := NewGraph(context.Background(), nodes)
+		if err != nil {
+			t.Fatalf("new graph: %v", err)
+		}
+		out, err := graph.Run(context.Background(), &TripState{RunID: "run-plugins-v1", Input: "北京一天"})
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if out.Research == nil || out.Research.Status != domain.ResearchSkipped {
+			t.Fatalf("research = %+v", out.Research)
+		}
+		if out.Plan.Lodging != nil || out.Plan.Totals.LodgingYuan != 0 {
+			t.Fatalf("lodging leaked into v1 plan: %+v", out.Plan.Lodging)
+		}
+		if len(out.Plan.Days) != 1 || len(out.Plan.Days[0].Blocks) != 1 || out.Plan.Totals.POICount != 1 {
+			t.Fatalf("v1 plan = %+v", out.Plan)
 		}
 	})
 }

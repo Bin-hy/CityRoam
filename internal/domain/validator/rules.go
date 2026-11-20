@@ -235,7 +235,11 @@ func checkC4(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.V
 }
 
 func checkC5(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.Violation {
-	if constraints.Budget.TotalYuan <= 0 || plan.Totals.CostYuan <= constraints.Budget.TotalYuan {
+	total := plan.Totals.CostYuan
+	if constraints.Lodging.Mentioned && constraints.LodgingIncluded() {
+		total += plan.Totals.LodgingYuan
+	}
+	if constraints.Budget.TotalYuan <= 0 || total <= constraints.Budget.TotalYuan {
 		return nil
 	}
 
@@ -246,7 +250,7 @@ func checkC5(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.V
 	return []domain.Violation{{
 		Code:       "C5",
 		Level:      level,
-		Message:    fmt.Sprintf("预算 %d 元，预计 %d 元，超出 %d 元", constraints.Budget.TotalYuan, plan.Totals.CostYuan, plan.Totals.CostYuan-constraints.Budget.TotalYuan),
+		Message:    fmt.Sprintf("预算 %d 元，预计 %d 元，超出 %d 元", constraints.Budget.TotalYuan, total, total-constraints.Budget.TotalYuan),
 		Suggestion: "减少点位、换免费景点或放宽预算",
 	}}
 }

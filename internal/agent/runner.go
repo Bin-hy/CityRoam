@@ -250,6 +250,7 @@ func (r *Runner) Resume(ctx context.Context, runID string, action ResumeAction) 
 				Suggestions:  state.Suggestions,
 				Previous:     state.Previous,
 				PreviousSeq:  state.PreviousSeq,
+				Research:     state.Research,
 			})
 			if err != nil {
 				return fmt.Errorf("runner: snapshot accepted plan: %w", err)
@@ -436,6 +437,7 @@ func (r *Runner) executeAdjustment(ctx context.Context, state *TripState) {
 		Candidates:     state.Candidates,
 		POIs:           poiMap(state.Candidates),
 		BaseVersion:    state.PreviousSeq,
+		Research:       state.Research,
 	})
 	if err != nil {
 		r.fail(ctx, state, err)

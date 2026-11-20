@@ -19,7 +19,18 @@ var (
 	      "additionalProperties": false,
 	      "properties": {
 	        "total_yuan": {"type": "integer", "minimum": 0},
-	        "hard": {"type": "boolean"}
+	        "hard": {"type": "boolean"},
+	        "include_lodging": {"type": "boolean", "description": "false 表示明确不含住宿；省略或 true 表示默认含"}
+	      }
+	    },
+	    "lodging": {
+	      "type": "object",
+	      "additionalProperties": false,
+	      "properties": {
+	        "mentioned": {"type": "boolean", "description": "用户是否明确提到酒店、民宿、住宿或住哪里"},
+	        "hotels": {"type": "array", "items": {"type": "string"}, "description": "只抽取用户原话中指定的酒店名"},
+	        "area": {"type": "string", "description": "用户希望住宿的区域"},
+	        "max_price_per_night_yuan": {"type": "integer", "minimum": 0}
 	      }
 	    },
 	    "daily": {

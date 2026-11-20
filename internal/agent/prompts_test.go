@@ -71,6 +71,8 @@ func TestPromptSchemas(t *testing.T) {
 	t.Run("schemas compile and validate", func(t *testing.T) {
 		constraint := compileSchema(t, ConstraintSchema)
 		assertValid(t, constraint, `{"city":"beijing","days":2,"pace":"relaxed","meals":{"enabled":true},"missing":[]}`)
+		assertValid(t, constraint, `{"city":"beijing","days":2,"budget":{"total_yuan":3000,"include_lodging":false},"lodging":{"mentioned":true,"hotels":["全季"],"area":"王府井","max_price_per_night_yuan":600},"missing":[]}`)
+		assertInvalid(t, constraint, `{"lodging":{"unexpected":true}}`)
 		assertInvalid(t, constraint, `{"days":9}`)
 		assertInvalid(t, constraint, `{"pace":"extreme"}`)
 		assertInvalid(t, constraint, `{"unexpected":true}`)
@@ -90,6 +92,18 @@ func TestPromptSchemas(t *testing.T) {
 		assertInvalid(t, intent, `{"scope":"unknown"}`)
 		assertInvalid(t, intent, `{"scope":"day","affected_days":[4]}`)
 	})
+}
+
+func TestParsePromptLodging(t *testing.T) {
+	rendered, err := RenderPrompt("parse", ParsePromptData{Input: "北京三天，预算含住宿", Today: "2026-11-20"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{"默认包含住宿", "不得编造酒店", "lodging.mentioned"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("parse prompt missing %q", want)
+		}
+	}
 }
 
 func compileSchema(t *testing.T, raw json.RawMessage) *jsonschema.Resolved {

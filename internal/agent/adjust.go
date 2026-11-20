@@ -29,6 +29,7 @@ type AdjustInput struct {
 	Candidates     []domain.POI
 	POIs           map[string]domain.POI
 	BaseVersion    int
+	Research       *domain.ResearchBrief
 }
 
 type AdjustOutput struct {
@@ -126,7 +127,7 @@ func (n *Nodes) Adjust(ctx context.Context, in AdjustInput) (AdjustOutput, error
 	merged := in.BaseDraft
 	merged.Days = append([]domain.DraftDay(nil), in.BaseDraft.Days...)
 	merged.Days[patch.DayIndex] = domain.DraftDay{Date: merged.Days[patch.DayIndex].Date, Items: patch.Items}
-	plan, err := n.scheduler.Build(merged, in.Constraints, allowed, n.routes)
+	plan, err := n.scheduler.Build(merged, in.Constraints, allowed, n.routes, scheduleOptions(in.Research))
 	if err != nil {
 		return AdjustOutput{}, &NodeError{Code: "schedule_failed", Message: "调整后重新排期失败", Err: err}
 	}

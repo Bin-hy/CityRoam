@@ -195,6 +195,16 @@ func normalizeConstraints(c domain.ConstraintSet) domain.ConstraintSet {
 	c.Interests = cleanNames(c.Interests)
 	c.MustVisit = cleanNames(c.MustVisit)
 	c.Avoid = cleanNames(c.Avoid)
+	c.Lodging.Area = strings.TrimSpace(c.Lodging.Area)
+	c.Lodging.Hotels = cleanNames(c.Lodging.Hotels)
+	if c.Lodging.MaxPricePerNightYuan < 0 {
+		c.Lodging.MaxPricePerNightYuan = 0
+	}
+	if !c.Lodging.Mentioned {
+		c.Lodging.Hotels = nil
+		c.Lodging.Area = ""
+		c.Lodging.MaxPricePerNightYuan = 0
+	}
 	return c
 }
 

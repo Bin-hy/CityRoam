@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -36,6 +37,144 @@ func newPresentNodes(events *eventRecorder, fixed time.Time) *Nodes {
 		WithNodeClock(func() time.Time { return fixed }),
 		WithNodeLogger(discardLogger()),
 	)
+}
+
+func TestPresentResearch(t *testing.T) {
+	fixed := time.Date(2026, 11, 19, 10, 0, 0, 0, time.Local)
+	research := func() *domain.ResearchBrief {
+		return &domain.ResearchBrief{
+			Status: domain.ResearchOK,
+			Accommodation: &domain.AccommodationBrief{
+				Mentioned:       true,
+				Selected:        &domain.Hotel{ID: "h1", Name: "测试酒店", PricePerNightYuan: 500, Provider: "flyai"},
+				AnchorDays:      []int{0},
+				Nights:          1,
+				TotalYuan:       500,
+				IncludeInBudget: true,
+			},
+			Guides: []domain.GuideSignal{{
+				POIID:    "poi-1",
+				Weight:   0.8,
+				Mentions: 2,
+				Note:     "攻略推荐",
+				Citations: []domain.GuideCitation{{
+					Title: "故宫攻略", URL: "https://example.com/a", Authority: 3,
+				}},
+			}},
+			Notes:     []string{"已检索"},
+			Warnings:  []string{},
+			ToolCalls: 4,
+		}
+	}
+
+	t.Run("snapshot deep copies research", func(t *testing.T) {
+		input := research()
+		out, err := newPresentNodes(&eventRecorder{}, fixed).Present(context.Background(), PresentInput{
+			RunID: "run-r1", Plan: presentPlan(), Research: input,
+		})
+		if err != nil {
+			t.Fatalf("present: %v", err)
+		}
+		if out.Snapshot.Research == nil || out.Snapshot.Research.Status != domain.ResearchOK {
+			t.Fatalf("snapshot research = %+v", out.Snapshot.Research)
+		}
+
+		input.Accommodation.Selected.Name = "被改写"
+		input.Accommodation.AnchorDays[0] = 1
+		input.Guides[0].POIID = "mutated"
+		input.Guides[0].Citations[0].Title = "被改写"
+		input.Notes[0] = "被改写"
+
+		snapshot := out.Snapshot.Research
+		if snapshot.Accommodation.Selected.Name != "测试酒店" || snapshot.Accommodation.AnchorDays[0] != 0 {
+			t.Fatalf("accommodation shared state: %+v", snapshot.Accommodation)
+		}
+		if snapshot.Guides[0].POIID != "poi-1" || snapshot.Guides[0].Citations[0].Title != "故宫攻略" {
+			t.Fatalf("guides shared state: %+v", snapshot.Guides)
+		}
+		if snapshot.Notes[0] != "已检索" {
+			t.Fatalf("notes shared state: %+v", snapshot.Notes)
+		}
+	})
+
+	t.Run("nil research stays nil and compatible", func(t *testing.T) {
+		out, err := newPresentNodes(&eventRecorder{}, fixed).Present(context.Background(), PresentInput{
+			RunID: "run-r2", Plan: presentPlan(),
+		})
+		if err != nil {
+			t.Fatalf("present: %v", err)
+		}
+		if out.Snapshot.Research != nil {
+			t.Fatalf("research = %+v, want nil", out.Snapshot.Research)
+		}
+		encoded, err := json.Marshal(out.Snapshot)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(encoded), `"research"`) {
+			t.Fatalf("snapshot JSON contains research: %s", encoded)
+		}
+	})
+
+	t.Run("plan.updated only carries summaries", func(t *testing.T) {
+		events := &eventRecorder{}
+		plan := presentPlan()
+		plan.Lodging = &domain.LodgingSummary{
+			Hotel: domain.Hotel{Name: "测试酒店"}, Nights: 1, TotalYuan: 500,
+			IncludeInBudget: true, PriceEstimated: true,
+		}
+		plan.Totals.LodgingYuan = 500
+		_, err := newPresentNodes(events, fixed).Present(context.Background(), PresentInput{
+			RunID: "run-r3", Plan: plan, Research: research(),
+		})
+		if err != nil {
+			t.Fatalf("present: %v", err)
+		}
+		payload := events.events[0].payload.(map[string]any)
+		if payload["research_status"] != domain.ResearchOK {
+			t.Fatalf("research_status = %v", payload["research_status"])
+		}
+		lodging, ok := payload["lodging_summary"].(*lodgingEventSummary)
+		if !ok {
+			t.Fatalf("lodging_summary = %T", payload["lodging_summary"])
+		}
+		if lodging.HotelName != "测试酒店" || lodging.TotalYuan != 500 || !lodging.PriceEstimated {
+			t.Fatalf("lodging summary = %+v", lodging)
+		}
+		guides, ok := payload["guide_summary"].(*guideEventSummary)
+		if !ok {
+			t.Fatalf("guide_summary = %T", payload["guide_summary"])
+		}
+		if guides.Matches != 1 || len(guides.POIIDs) != 1 || guides.POIIDs[0] != "poi-1" {
+			t.Fatalf("guide summary = %+v", guides)
+		}
+		for _, banned := range []string{"research", "tool_calls", "guides", "accommodation"} {
+			if _, exists := payload[banned]; exists {
+				t.Fatalf("payload leaked %q: %+v", banned, payload)
+			}
+		}
+	})
+
+	t.Run("adjustment version copies base research", func(t *testing.T) {
+		input := research()
+		previous := presentPlan()
+		out, err := newPresentNodes(&eventRecorder{}, fixed).Present(context.Background(), PresentInput{
+			RunID: "run-r4", Plan: presentPlan(), Previous: &previous,
+			PreviousSeq: 2, Reason: "adjustment", Research: input,
+		})
+		if err != nil {
+			t.Fatalf("present: %v", err)
+		}
+		if out.Snapshot.Seq != 3 || out.Snapshot.Reason != "adjustment" {
+			t.Fatalf("snapshot = %+v", out.Snapshot)
+		}
+		if out.Snapshot.Research == nil || out.Snapshot.Research.Accommodation.Selected.ID != "h1" {
+			t.Fatalf("adjustment research = %+v", out.Snapshot.Research)
+		}
+		if out.Snapshot.Research == input {
+			t.Fatal("adjustment research shares the input pointer")
+		}
+	})
 }
 
 func TestPresentNode(t *testing.T) {

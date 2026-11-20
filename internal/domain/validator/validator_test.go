@@ -238,6 +238,48 @@ func TestC5(t *testing.T) {
 	}
 }
 
+func TestC5Lodging(t *testing.T) {
+	includeLodging := false
+	tests := []struct {
+		name        string
+		cost        int
+		lodging     int
+		mentioned   bool
+		include     *bool
+		budget      int
+		wantWarning bool
+	}{
+		{name: "included lodging counts", cost: 300, lodging: 300, mentioned: true, budget: 500, wantWarning: true},
+		{name: "equal total passes", cost: 200, lodging: 300, mentioned: true, budget: 500},
+		{name: "excluded lodging ignored", cost: 300, lodging: 300, mentioned: true, include: &includeLodging, budget: 500},
+		{name: "unmentioned lodging ignored", cost: 300, lodging: 300, budget: 500},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, pois := singleBlockPlan("09:00", "10:00")
+			plan.Totals.CostYuan = tt.cost
+			plan.Totals.LodgingYuan = tt.lodging
+			constraints := domain.ConstraintSet{
+				Budget: domain.BudgetConstraint{TotalYuan: tt.budget, IncludeLodging: tt.include},
+				Lodging: domain.LodgingConstraint{
+					Mentioned: tt.mentioned,
+				},
+			}
+			c5 := violationsByCode(Validate(plan, constraints, pois, nil), "C5")
+			if tt.wantWarning {
+				if len(c5) != 1 || c5[0].Level != domain.LevelWarning {
+					t.Fatalf("C5 = %+v, want one warning", c5)
+				}
+				return
+			}
+			if len(c5) != 0 {
+				t.Fatalf("C5 = %+v, want none", c5)
+			}
+		})
+	}
+}
+
 func TestC6(t *testing.T) {
 	enabled := domain.MealConstraint{Enabled: true}
 

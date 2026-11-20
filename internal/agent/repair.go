@@ -135,7 +135,7 @@ func (n *Nodes) Repair(ctx context.Context, in RepairInput) (RepairOutput, error
 
 	merged := in.Draft
 	merged.Days[target] = domain.DraftDay{Date: merged.Days[target].Date, Items: patch.Items}
-	plan, err := n.scheduler.Build(merged, in.Constraints, in.POIs, n.routes)
+	plan, err := n.scheduler.Build(merged, in.Constraints, in.POIs, n.routes, domain.ScheduleOptions{})
 	if err != nil {
 		return RepairOutput{}, &NodeError{Code: "schedule_failed", Message: "修复后重新排期失败", Err: err}
 	}
@@ -268,7 +268,7 @@ func (n *Nodes) fitDailyHours(
 		if !trimmed {
 			break
 		}
-		built, err := n.scheduler.Build(draft, constraints, pois, n.routes)
+		built, err := n.scheduler.Build(draft, constraints, pois, n.routes, domain.ScheduleOptions{})
 		if err != nil {
 			break
 		}

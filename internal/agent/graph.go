@@ -178,6 +178,14 @@ func (g *Graph) parse(ctx context.Context, state *TripState) (*TripState, error)
 	}
 	state.Constraints = out.Constraints
 	state.Missing = out.Missing
+	if state.ConstraintPatch != nil {
+		patch := *state.ConstraintPatch
+		state.Constraints = domain.Merge(out.Constraints, patch)
+		if patch.Budget.IncludeLodging != nil {
+			state.Constraints.Lodging.Mentioned = patch.Lodging.Mentioned
+		}
+		state.Missing = state.Constraints.MissingCritical()
+	}
 	state.LLM = addUsage(state.LLM, out.Usage)
 	if len(out.Missing) > 0 {
 		state.Status = StatusAwaitingUser
@@ -221,6 +229,7 @@ func (g *Graph) draft(ctx context.Context, state *TripState) (*TripState, error)
 		RunID:       state.RunID,
 		Constraints: state.Constraints,
 		Candidates:  state.Candidates,
+		Research:    state.Research,
 	})
 	if err != nil {
 		return nil, err
@@ -236,6 +245,7 @@ func (g *Graph) schedule(ctx context.Context, state *TripState) (*TripState, err
 		Constraints: state.Constraints,
 		Draft:       state.Draft,
 		POIs:        poiMap(state.Candidates),
+		Research:    state.Research,
 	})
 	if err != nil {
 		return nil, err
@@ -322,6 +332,7 @@ func (g *Graph) present(ctx context.Context, state *TripState) (*TripState, erro
 		Suggestions:  state.Suggestions,
 		Previous:     state.Previous,
 		PreviousSeq:  state.PreviousSeq,
+		Research:     state.Research,
 	})
 	if err != nil {
 		return nil, err
@@ -332,6 +343,9 @@ func (g *Graph) present(ctx context.Context, state *TripState) (*TripState, erro
 }
 
 func presentReason(state *TripState) string {
+	if state.Mode == "replan" {
+		return "replan"
+	}
 	if state.Mode == "adjustment" {
 		return "adjustment"
 	}
