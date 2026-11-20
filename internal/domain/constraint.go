@@ -38,6 +38,7 @@ type LodgingConstraint struct {
 	Hotels               []string `json:"hotels,omitempty"`
 	Area                 string   `json:"area,omitempty"`
 	MaxPricePerNightYuan int      `json:"max_price_per_night_yuan,omitempty"`
+	AnchorDays           []int    `json:"anchor_days,omitempty"`
 }
 
 // LodgingIncluded reports whether lodging belongs in the budget. A nil
@@ -163,6 +164,9 @@ func Merge(base, patch ConstraintSet) ConstraintSet {
 	if patch.Lodging.MaxPricePerNightYuan > 0 {
 		out.Lodging.MaxPricePerNightYuan = patch.Lodging.MaxPricePerNightYuan
 	}
+	if patch.Lodging.AnchorDays != nil {
+		out.Lodging.AnchorDays = cloneInts(patch.Lodging.AnchorDays)
+	}
 	if patch.Daily.MaxHours != 0 {
 		out.Daily.MaxHours = patch.Daily.MaxHours
 	}
@@ -276,6 +280,13 @@ func cloneStrings(values []string) []string {
 		return nil
 	}
 	return append([]string(nil), values...)
+}
+
+func cloneInts(values []int) []int {
+	if values == nil {
+		return nil
+	}
+	return append([]int(nil), values...)
 }
 
 func excludeStrings(values, remove []string) []string {

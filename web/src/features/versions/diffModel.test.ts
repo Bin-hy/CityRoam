@@ -27,7 +27,7 @@ function day(blocks: Block[], overrides: Partial<DayPlan> = {}): DayPlan {
 }
 
 function itinerary(days: DayPlan[]): Itinerary {
-  return { city: "beijing", days, totals: { cost_yuan: 0, poi_count: 0, walking_km: 0 } };
+  return { city: "beijing", days, explanations: [], totals: { cost_yuan: 0, poi_count: 0, walking_km: 0 } };
 }
 
 describe("diffItineraries", () => {

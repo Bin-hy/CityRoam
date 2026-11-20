@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"unicode"
 
 	"trippilot/internal/domain"
+	"trippilot/internal/skills"
 )
 
 const (
@@ -20,8 +22,9 @@ const (
 	researchFallbackByte = 8 << 10
 	researchEventTimeout = 3 * time.Second
 
-	researchHotelTool = "search_hotels"
-	researchGuideTool = "search_travel_notes"
+	researchHotelTool   = "search_hotels"
+	researchGuideTool   = "search_travel_notes"
+	researchWeatherTool = "get_weather"
 )
 
 type ResearchInput struct {
@@ -31,6 +34,15 @@ type ResearchInput struct {
 	Constraints   domain.ConstraintSet
 	Candidates    []domain.POI
 	ResolvedHotel *domain.Hotel
+	Skills        []skills.Skill
+	SkillPins     []skills.CatalogEntry
+}
+
+// loadedSkill is the prompt-safe record of a skill body loaded in this run.
+type loadedSkill struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	SHA256  string `json:"sha256"`
 }
 
 type ResearchOutput struct {
@@ -59,39 +71,55 @@ type guideResult struct {
 }
 
 type researchSession struct {
-	brief          domain.ResearchBrief
-	toolCalls      int
-	executed       int
-	hotels         []domain.Hotel
-	guides         []guideResult
-	toolErrors     []string
-	timedOut       bool
-	llmFailed      bool
-	limitHit       bool
-	parsed         bool
-	fallback       bool
-	hotelAvailable bool
+	brief            domain.ResearchBrief
+	toolCalls        int
+	executed         int
+	hotels           []domain.Hotel
+	guides           []guideResult
+	toolErrors       []string
+	timedOut         bool
+	llmFailed        bool
+	limitHit         bool
+	parsed           bool
+	fallback         bool
+	hotelAvailable   bool
+	weather          []domain.WeatherDay
+	weatherStatus    string
+	weatherWarnings  []string
+	toolResults      map[string]string
+	skillLoads       int
+	loadedSkills     []loadedSkill
+	skillUnavailable *loadedSkill
 }
 
 // Research runs the skill-style tool loop. It never fails the run: missing
 // dependencies are skipped and upstream/tool failures degrade to a brief.
 func (n *Nodes) Research(ctx context.Context, in ResearchInput) (ResearchOutput, error) {
 	brief := domain.ResearchBrief{Status: domain.ResearchSkipped}
-	if len(n.researchTools) == 0 || n.toolLLM == nil {
-		return ResearchOutput{Brief: brief}, nil
+	specified := cleanResearchNames(in.Constraints.Lodging.Hotels)
+	tools := n.researchTools
+	if len(tools) > 0 && skillToolEnabled(in.Skills, in.SkillPins, n.skillProvider) {
+		tools = append(append([]ResearchTool(nil), tools...), newSkillTool(in.Skills, in.SkillPins, n.skillProvider))
+	}
+	if len(tools) == 0 || n.toolLLM == nil {
+		if len(specified) == 0 || n.hotelResolver == nil {
+			return ResearchOutput{Brief: brief}, nil
+		}
+		return n.researchWithoutTools(ctx, in, specified), nil
 	}
 
 	startedAt := n.now()
 	ctx, cancel := n.researchDeadline(ctx)
 	defer cancel()
 
-	definitions, toolsByName := researchDefinitions(n.researchTools)
+	definitions, toolsByName := researchDefinitions(tools)
 	n.publishResearch(ctx, in.RunID, "research.started", map[string]any{
-		"tools":  toolNames(n.researchTools),
+		"tools":  toolNames(tools),
 		"status": "started",
 	})
 	session := &researchSession{
 		hotelAvailable: toolsByName[researchHotelTool] != nil,
+		weatherStatus:  "skipped",
 	}
 	if ctx.Err() != nil {
 		session.timedOut = true
@@ -109,11 +137,16 @@ func (n *Nodes) Research(ctx context.Context, in ResearchInput) (ResearchOutput,
 		return n.finishResearch(ctx, in, session, nil, "", startedAt), nil
 	}
 
+	skillEntries := skillCatalog(in.Skills)
+	if len(skillEntries) == 0 {
+		skillEntries = in.SkillPins
+	}
 	system, user, err := RenderResearchPrompt(ResearchPromptData{
 		Input:       in.Input,
 		Constraints: constraintsJSON,
 		Candidates:  candidatesJSON,
-		Tools:       toolPromptInfos(n.researchTools),
+		Tools:       toolPromptInfos(tools),
+		SkillLines:  skills.CatalogLines(skillEntries),
 		Disabled:    append([]DisabledPlugin(nil), n.researchDisabled...),
 		Today:       n.now().Format("2006-01-02"),
 		Nights:      domain.LodgingNights(in.Constraints.Days),
@@ -153,18 +186,10 @@ func (n *Nodes) Research(ctx context.Context, in ResearchInput) (ResearchOutput,
 		})
 		limitReached := false
 		for _, call := range completion.ToolCalls {
-			if session.toolCalls >= n.researchMaxToolCalls {
-				session.limitHit = true
+			content, limited := n.executeResearchTool(ctx, in, call, toolsByName, session)
+			if limited {
 				limitReached = true
-				messages = append(messages, ChatMessage{
-					Role:       "tool",
-					ToolCallID: call.ID,
-					Content:    toolErrorContent("tool_call_limit", "本次研究已达到工具调用上限"),
-				})
-				continue
 			}
-			session.toolCalls++
-			content := n.executeResearchTool(ctx, in, call, toolsByName, session)
 			messages = append(messages, ChatMessage{
 				Role:       "tool",
 				ToolCallID: call.ID,
@@ -180,6 +205,10 @@ func (n *Nodes) Research(ctx context.Context, in ResearchInput) (ResearchOutput,
 	}
 	if ctx.Err() != nil {
 		session.timedOut = true
+	}
+	if len(specified) > 0 && n.hotelResolver != nil && ctx.Err() == nil {
+		merged, _ := resolveSpecifiedHotels(ctx, n.hotelResolver, specified, session.hotels)
+		session.hotels = merged
 	}
 
 	briefPtr := decodeResearchBrief(lastContent)
@@ -208,6 +237,7 @@ func (n *Nodes) Research(ctx context.Context, in ResearchInput) (ResearchOutput,
 		}
 	}
 	applyGuideSignals(&session.brief, in.Candidates, session.guides)
+	applySessionWeather(&session.brief, session)
 	session.brief.ToolCalls = session.executed
 	session.brief.DurationMS = time.Since(startedAt).Milliseconds()
 
@@ -217,17 +247,20 @@ func (n *Nodes) Research(ctx context.Context, in ResearchInput) (ResearchOutput,
 	if question != nil {
 		session.brief.Status = domain.ResearchDegraded
 	}
-	if question == nil && (session.timedOut || session.llmFailed || len(session.toolErrors) > 0 || session.limitHit || !session.parsed) {
+	if question == nil && (session.timedOut || session.llmFailed || len(session.toolErrors) > 0 || session.limitHit || !session.parsed || session.skillUnavailable != nil) {
 		session.brief.Status = domain.ResearchDegraded
 	}
 
 	out := ResearchOutput{Brief: session.brief, Question: question, Usage: usage}
 	n.publishResearch(ctx, in.RunID, "research.completed", map[string]any{
-		"status":        session.brief.Status,
-		"hotel":         selectedHotelName(session.brief),
-		"guide_matches": len(session.brief.Guides),
-		"tool_calls":    session.brief.ToolCalls,
-		"duration_ms":   session.brief.DurationMS,
+		"status":         session.brief.Status,
+		"hotel":          selectedHotelName(session.brief),
+		"guide_matches":  len(session.brief.Guides),
+		"tool_calls":     session.brief.ToolCalls,
+		"duration_ms":    session.brief.DurationMS,
+		"weather_status": session.weatherStatusValue(),
+		"weather_days":   len(session.brief.Weather),
+		"skills_loaded":  session.loadedSkillRecords(),
 	})
 	if session.brief.Status == domain.ResearchDegraded {
 		n.publishResearch(ctx, in.RunID, "research.degraded", map[string]any{
@@ -244,9 +277,72 @@ func (n *Nodes) Research(ctx context.Context, in ResearchInput) (ResearchOutput,
 	return out, nil
 }
 
+// researchWithoutTools resolves specified hotels by geocoding when no research
+// plugin is available, so a user-named hotel still anchors the plan.
+func (n *Nodes) researchWithoutTools(ctx context.Context, in ResearchInput, specified []string) ResearchOutput {
+	startedAt := n.now()
+	ctx, cancel := n.researchDeadline(ctx)
+	defer cancel()
+
+	n.publishResearch(ctx, in.RunID, "research.started", map[string]any{
+		"tools":  []string{},
+		"status": "started",
+	})
+	session := &researchSession{}
+	hotels, calls := resolveSpecifiedHotels(ctx, n.hotelResolver, specified, nil)
+	session.hotels = hotels
+	session.executed = calls
+	if ctx.Err() != nil {
+		session.timedOut = true
+	}
+
+	var usage Usage
+	if fallback, fallbackUsage := n.fallbackResearchBrief(ctx, in, session); fallback != nil {
+		session.brief = *fallback
+		session.parsed = true
+		session.fallback = true
+		usage = addUsage(usage, fallbackUsage)
+	}
+	question := normalizeResearchBrief(&session.brief, in, session)
+	applyGuideSignals(&session.brief, in.Candidates, session.guides)
+	applySessionWeather(&session.brief, session)
+	session.brief.ToolCalls = session.executed
+	session.brief.DurationMS = time.Since(startedAt).Milliseconds()
+	if session.brief.Status == "" || session.brief.Status == domain.ResearchSkipped {
+		session.brief.Status = domain.ResearchOK
+	}
+	if question != nil || session.timedOut || session.llmFailed {
+		session.brief.Status = domain.ResearchDegraded
+	}
+
+	n.publishResearch(ctx, in.RunID, "research.completed", map[string]any{
+		"status":         session.brief.Status,
+		"hotel":          selectedHotelName(session.brief),
+		"guide_matches":  len(session.brief.Guides),
+		"tool_calls":     session.brief.ToolCalls,
+		"duration_ms":    session.brief.DurationMS,
+		"weather_status": session.weatherStatusValue(),
+		"weather_days":   len(session.brief.Weather),
+	})
+	if session.brief.Status == domain.ResearchDegraded {
+		n.publishResearch(ctx, in.RunID, "research.degraded", map[string]any{
+			"reason":     researchDegradeReason(session),
+			"tool_calls": session.brief.ToolCalls,
+			"partial":    session.parsed || len(session.hotels) > 0,
+		})
+	}
+	if question != nil {
+		n.publishResearch(ctx, in.RunID, "research.needs_input", map[string]any{
+			"question": question,
+		})
+	}
+	return ResearchOutput{Brief: session.brief, Question: question, Usage: usage}
+}
+
 func (n *Nodes) finishResearch(ctx context.Context, in ResearchInput, session *researchSession, usage *Usage, reason string, startedAt time.Time) ResearchOutput {
 	question := normalizeResearchBrief(&session.brief, in, session)
 	applyGuideSignals(&session.brief, in.Candidates, session.guides)
+	applySessionWeather(&session.brief, session)
 	session.brief.ToolCalls = session.executed
 	session.brief.DurationMS = time.Since(startedAt).Milliseconds()
 	session.brief.Status = domain.ResearchDegraded
@@ -258,11 +354,14 @@ func (n *Nodes) finishResearch(ctx context.Context, in ResearchInput, session *r
 		reason = researchDegradeReason(session)
 	}
 	n.publishResearch(ctx, in.RunID, "research.completed", map[string]any{
-		"status":        session.brief.Status,
-		"hotel":         selectedHotelName(session.brief),
-		"guide_matches": len(session.brief.Guides),
-		"tool_calls":    session.brief.ToolCalls,
-		"duration_ms":   session.brief.DurationMS,
+		"status":         session.brief.Status,
+		"hotel":          selectedHotelName(session.brief),
+		"guide_matches":  len(session.brief.Guides),
+		"tool_calls":     session.brief.ToolCalls,
+		"duration_ms":    session.brief.DurationMS,
+		"weather_status": session.weatherStatusValue(),
+		"weather_days":   len(session.brief.Weather),
+		"skills_loaded":  session.loadedSkillRecords(),
 	})
 	n.publishResearch(ctx, in.RunID, "research.degraded", map[string]any{
 		"reason":     reason,
@@ -297,29 +396,123 @@ func (n *Nodes) researchDeadline(ctx context.Context) (context.Context, context.
 	return context.WithTimeout(ctx, timeout)
 }
 
-func (n *Nodes) executeResearchTool(ctx context.Context, in ResearchInput, call ToolCall, tools map[string]ResearchTool, session *researchSession) string {
+func (n *Nodes) executeResearchTool(ctx context.Context, in ResearchInput, call ToolCall, tools map[string]ResearchTool, session *researchSession) (string, bool) {
 	tool := tools[call.Name]
 	if tool == nil {
-		return toolErrorContent("unknown_tool", "工具 "+call.Name+" 未启用")
+		return toolErrorContent("unknown_tool", "工具 "+call.Name+" 未启用"), false
 	}
 	if call.Name == researchHotelTool && !in.Constraints.Lodging.Mentioned {
-		return toolErrorContent("hotel_not_mentioned", "用户没有提及住宿，不能调用酒店工具")
+		return toolErrorContent("hotel_not_mentioned", "用户没有提及住宿，不能调用酒店工具"), false
 	}
+	reuseKey := call.Name + "\x00" + string(call.Arguments)
+	if session.toolResults != nil {
+		if content, ok := session.toolResults[reuseKey]; ok {
+			return content, false
+		}
+	}
+	if call.Name == researchSkillTool && session.skillLoads >= researchMaxSkillLoads {
+		return toolErrorContent("skill_load_limit", "本次研究最多加载 3 个技能"), false
+	}
+	if session.toolCalls >= n.researchMaxToolCalls {
+		session.limitHit = true
+		return toolErrorContent("tool_call_limit", "本次研究已达到工具调用上限"), true
+	}
+	session.toolCalls++
 	if n.researchContext != nil {
 		ctx = n.researchContext(ctx, in.RunID, in.TripID)
 	}
 	output, err := tool.Call(ctx, call.Arguments)
 	session.executed++
 	if err != nil {
+		if call.Name == researchWeatherTool {
+			session.recordWeatherError(err, "")
+			return toolErrorContent("tool_error", "工具调用失败"), false
+		}
+		if call.Name == researchSkillTool {
+			return toolErrorContent("tool_error", "技能加载失败"), false
+		}
 		session.toolErrors = appendUnique(session.toolErrors, call.Name)
-		return toolErrorContent("tool_error", "工具调用失败")
+		return toolErrorContent("tool_error", "工具调用失败"), false
 	}
 	if code, message, failed := toolOutputError(output); failed {
+		if call.Name == researchWeatherTool {
+			session.recordWeatherError(nil, code)
+			return toolErrorContent(code, message), false
+		}
+		if call.Name == researchSkillTool {
+			if code == "skill_unavailable" {
+				session.recordSkillUnavailable(output)
+				return string(output), false
+			}
+			return toolErrorContent(code, message), false
+		}
 		session.toolErrors = appendUnique(session.toolErrors, call.Name)
-		return toolErrorContent(code, message)
+		return toolErrorContent(code, message), false
+	}
+	if call.Name == researchSkillTool {
+		content, payload, ok := renderSkillContent(output)
+		if !ok {
+			return toolErrorContent("bad_response", "技能内容无效"), false
+		}
+		session.skillLoads++
+		session.recordSkillLoaded(payload)
+		n.publishResearch(ctx, in.RunID, "research.skill_loaded", map[string]any{
+			"name":    payload.Name,
+			"version": payload.Version,
+			"sha256":  payload.SHA256,
+		})
+		if session.toolResults == nil {
+			session.toolResults = make(map[string]string)
+		}
+		session.toolResults[reuseKey] = content
+		return content, false
 	}
 	session.recordToolOutput(call.Name, output)
-	return externalDataContent(output)
+	content := externalDataContent(output)
+	if session.toolResults == nil {
+		session.toolResults = make(map[string]string)
+	}
+	session.toolResults[reuseKey] = content
+	return content, false
+}
+
+func (s *researchSession) recordSkillLoaded(payload skillPayload) {
+	for _, existing := range s.loadedSkills {
+		if existing.Name == payload.Name {
+			return
+		}
+	}
+	s.loadedSkills = append(s.loadedSkills, loadedSkill{
+		Name:    payload.Name,
+		Version: payload.Version,
+		SHA256:  payload.SHA256,
+	})
+}
+
+func (s *researchSession) recordSkillUnavailable(output json.RawMessage) {
+	if s.skillUnavailable != nil {
+		return
+	}
+	var decoded struct {
+		Error struct {
+			Skill struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"skill"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(output, &decoded) != nil {
+		return
+	}
+	name := strings.TrimSpace(decoded.Error.Skill.Name)
+	if name == "" {
+		return
+	}
+	s.skillUnavailable = &loadedSkill{Name: name, Version: decoded.Error.Skill.Version}
+}
+
+func (s *researchSession) loadedSkillRecords() []loadedSkill {
+	return append([]loadedSkill{}, s.loadedSkills...)
 }
 
 func (s *researchSession) recordToolOutput(name string, output json.RawMessage) {
@@ -372,7 +565,80 @@ func (s *researchSession) recordToolOutput(name string, output json.RawMessage) 
 				s.guides = append(s.guides, result)
 			}
 		}
+	case researchWeatherTool:
+		s.recordWeatherOutput(output)
 	}
+}
+
+func (s *researchSession) recordWeatherOutput(output json.RawMessage) {
+	var decoded struct {
+		Days     []domain.WeatherDay `json:"days"`
+		Warnings []string            `json:"warnings"`
+	}
+	if json.Unmarshal(output, &decoded) != nil {
+		s.recordWeatherError(nil, "bad_response")
+		return
+	}
+	for _, warning := range decoded.Warnings {
+		if warning = strings.TrimSpace(warning); warning != "" {
+			s.weatherWarnings = appendUnique(s.weatherWarnings, warning)
+		}
+	}
+	seen := make(map[string]struct{}, len(s.weather))
+	for _, day := range s.weather {
+		seen[day.Date] = struct{}{}
+	}
+	for _, day := range decoded.Days {
+		if strings.TrimSpace(day.Date) == "" {
+			continue
+		}
+		if _, dup := seen[day.Date]; dup {
+			continue
+		}
+		seen[day.Date] = struct{}{}
+		s.weather = append(s.weather, day)
+	}
+	if len(s.weather) == 0 {
+		s.weatherStatus = "empty"
+		return
+	}
+	s.weatherStatus = "ok"
+}
+
+func (s *researchSession) recordWeatherError(err error, code string) {
+	reason := "查询失败"
+	switch {
+	case code == "timeout" || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+		s.weatherStatus = "timeout"
+		reason = "查询超时"
+	case code == "invalid_input":
+		s.weatherStatus = "invalid"
+		reason = "城市或日期无效"
+	case code == "":
+		s.weatherStatus = "failed"
+	default:
+		s.weatherStatus = "unavailable"
+		reason = "上游服务异常"
+	}
+	s.weatherWarnings = appendUnique(s.weatherWarnings, "天气不可用（"+reason+"）")
+}
+
+func applySessionWeather(brief *domain.ResearchBrief, session *researchSession) {
+	if len(session.weather) > 0 {
+		brief.Weather = append([]domain.WeatherDay(nil), session.weather...)
+	} else {
+		brief.Weather = nil
+	}
+	for _, warning := range session.weatherWarnings {
+		brief.Warnings = appendUnique(brief.Warnings, warning)
+	}
+}
+
+func (s *researchSession) weatherStatusValue() string {
+	if s == nil || s.weatherStatus == "" {
+		return "skipped"
+	}
+	return s.weatherStatus
 }
 
 func (n *Nodes) fallbackResearchBrief(ctx context.Context, in ResearchInput, session *researchSession) (*domain.ResearchBrief, Usage) {
@@ -553,6 +819,45 @@ func shouldRetryStructuredSelection(in ResearchInput, session *researchSession, 
 	return session.brief.Accommodation == nil || session.brief.Accommodation.Selected == nil
 }
 
+// degradedResearch identifies runs where the brief LLM never completed, so
+// the tool results themselves must decide the lodging fallback.
+func degradedResearch(session *researchSession) bool {
+	if session == nil {
+		return false
+	}
+	return session.timedOut || session.llmFailed || (!session.parsed && session.executed > 0)
+}
+
+func firstPricedHotel(hotels []domain.Hotel) *domain.Hotel {
+	for _, hotel := range hotels {
+		if hotel.PricePerNightYuan > 0 {
+			copyHotel := hotel
+			return &copyHotel
+		}
+	}
+	return nil
+}
+
+func anchorDaysFor(constraints domain.ConstraintSet) []int {
+	days := domain.NormalizeAnchorDays(constraints.Lodging.AnchorDays, constraints.Days)
+	if len(days) == 0 && constraints.Days > 0 {
+		days = make([]int, constraints.Days)
+		for day := range days {
+			days[day] = day
+		}
+	}
+	return days
+}
+
+func hotelMatchesSpecified(hotel domain.Hotel, specified []string) bool {
+	for _, name := range specified {
+		if hotelNameMatches(hotel.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeResearchBrief(brief *domain.ResearchBrief, in ResearchInput, session *researchSession) *domain.ResearchQuestion {
 	constraints := in.Constraints
 	specified := cleanResearchNames(constraints.Lodging.Hotels)
@@ -572,7 +877,6 @@ func normalizeResearchBrief(brief *domain.ResearchBrief, in ResearchInput, sessi
 	if accommodation.Selected != nil {
 		proposed = accommodation.Selected
 	}
-	proposedAnchorDays := accommodation.AnchorDays
 	accommodation.Mentioned = true
 	accommodation.Specified = specified
 	accommodation.Nights = domain.LodgingNights(constraints.Days)
@@ -616,13 +920,15 @@ func normalizeResearchBrief(brief *domain.ResearchBrief, in ResearchInput, sessi
 				}
 				question = buildHotelQuestion(code, specified, session.hotels)
 			}
+		} else if degradedResearch(session) {
+			selected = firstPricedHotel(session.hotels)
 		}
 	}
 
 	if selected != nil {
 		hotel := sanitizeHotel(*selected)
 		accommodation.Selected = &hotel
-		accommodation.AnchorDays = domain.NormalizeAnchorDays(proposedAnchorDays, constraints.Days)
+		accommodation.AnchorDays = anchorDaysFor(constraints)
 		if hotel.PricePerNightYuan > 0 {
 			nights := accommodation.Nights
 			accommodation.NightlyYuan = hotel.PricePerNightYuan
@@ -632,11 +938,16 @@ func normalizeResearchBrief(brief *domain.ResearchBrief, in ResearchInput, sessi
 			accommodation.PriceEstimated = hotel.PriceEstimated
 		} else {
 			accommodation.PriceEstimated = true
-			brief.Warnings = appendUnique(brief.Warnings, "未获取到房价，住宿费用未计入预算")
-			if len(specified) > 0 && in.ResolvedHotel == nil {
+			warning := "未获取到房价，住宿费用未计入预算"
+			if hotelMatchesSpecified(hotel, specified) && hotel.Provider == "amap" {
+				warning = "酒店价格为未知，未计入预算"
+				accommodation.IncludeInBudget = false
+			} else if len(specified) > 0 && in.ResolvedHotel == nil {
 				question = buildHotelQuestion("hotel_unconfirmed", specified, session.hotels)
 				accommodation.Selected = nil
+				accommodation.AnchorDays = nil
 			}
+			brief.Warnings = appendUnique(brief.Warnings, warning)
 		}
 	} else {
 		if len(specified) > 0 && question == nil {
@@ -1060,6 +1371,8 @@ func researchDegradeReason(session *researchSession) string {
 		return "tool_call_limit"
 	case session.llmFailed:
 		return "research_llm_failed"
+	case session.skillUnavailable != nil:
+		return "skill_unavailable: " + session.skillUnavailable.Name + "@" + session.skillUnavailable.Version
 	case len(session.toolErrors) > 0:
 		return session.toolErrors[0]
 	case !session.parsed:

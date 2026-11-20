@@ -16,7 +16,6 @@ import (
 )
 
 const (
-	guideDefaultSite  = "xiaohongshu.com"
 	guideDefaultCount = 8
 	guideMaxCount     = 10
 	guideMaxResponse  = 2 << 20
@@ -47,9 +46,7 @@ func (in *SearchNotesInput) applyDefaults() {
 	if in.Count == 0 {
 		in.Count = guideDefaultCount
 	}
-	if strings.TrimSpace(in.Site) == "" {
-		in.Site = guideDefaultSite
-	}
+	in.Site = strings.TrimSpace(in.Site)
 }
 
 func (in SearchNotesInput) Validate() error {
@@ -166,7 +163,7 @@ func (t *GuideTool) Call(ctx context.Context, input json.RawMessage) (json.RawMe
 	}
 
 	query := strings.TrimSpace(in.Query)
-	if !strings.Contains(strings.ToLower(query), "site:") {
+	if in.Site != "" && !strings.Contains(strings.ToLower(query), "site:") {
 		query = "site:" + in.Site + " " + query
 	}
 	body, err := json.Marshal(map[string]any{

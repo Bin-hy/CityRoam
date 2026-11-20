@@ -1,15 +1,27 @@
 import { lazy, Suspense } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Outlet, Route, Routes } from "react-router-dom";
+import { AppHeader } from "@/components/AppHeader";
+import { AuthGate } from "@/features/auth/AuthGate";
 
 const CreatePage = lazy(() => import("@/features/create/CreatePage").then((module) => ({ default: module.CreatePage })));
 const WorkspacePage = lazy(() =>
   import("@/features/workspace/WorkspacePage").then((module) => ({ default: module.WorkspacePage })),
 );
+const LoginPage = lazy(() => import("@/features/auth/LoginPage").then((module) => ({ default: module.LoginPage })));
 const SharePage = lazy(() => import("@/features/share/SharePage").then((module) => ({ default: module.SharePage })));
 const EvalDashboard = lazy(() =>
   import("@/features/eval/EvalDashboard").then((module) => ({ default: module.EvalDashboard })),
 );
 const NotFoundPage = lazy(() => import("@/pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
+
+function AppLayout() {
+  return (
+    <>
+      <AppHeader />
+      <Outlet />
+    </>
+  );
+}
 
 export function App() {
   return (
@@ -19,8 +31,25 @@ export function App() {
       }
     >
       <Routes>
-        <Route path="/" element={<CreatePage />} />
-        <Route path="/trips/:tripId" element={<WorkspacePage />} />
+        <Route element={<AppLayout />}>
+          <Route
+            path="/"
+            element={
+              <AuthGate>
+                <CreatePage />
+              </AuthGate>
+            }
+          />
+          <Route
+            path="/trips/:tripId"
+            element={
+              <AuthGate>
+                <WorkspacePage />
+              </AuthGate>
+            }
+          />
+        </Route>
+        <Route path="/login" element={<LoginPage />} />
         <Route path="/share/:slug" element={<SharePage />} />
         <Route path="/eval" element={<EvalDashboard />} />
         <Route path="*" element={<NotFoundPage />} />

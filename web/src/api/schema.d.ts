@@ -55,7 +55,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/trips": {
+    "/api/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current authentication state */
+        get: operations["getAuthMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Start the OIDC authorization code flow */
+        get: operations["startLogin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** OIDC callback that creates the session */
+        get: operations["oidcCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
         parameters: {
             query?: never;
             header?: never;
@@ -63,6 +114,24 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
+        put?: never;
+        /** Delete the server-side session */
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trips": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List trips owned by the current user */
+        get: operations["listTrips"];
         put?: never;
         /** Create a trip and start planning */
         post: operations["createTrip"];
@@ -241,7 +310,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Provide constraints, accept or reject an awaiting run */
+        /** Provide constraints, accept, reject or revise an awaiting run */
         post: operations["resumeRun"];
         delete?: never;
         options?: never;
@@ -373,6 +442,50 @@ export interface components {
             enabled: boolean;
             disabled_reason?: string;
         };
+        AuthUser: {
+            id: string;
+            email?: string | null;
+            name?: string | null;
+            /** @enum {string} */
+            role: "user" | "admin";
+        };
+        AuthMe: {
+            /** @description Whether login is mandatory */
+            enabled: boolean;
+            authenticated: boolean;
+            provider_name: string;
+            user?: components["schemas"]["AuthUser"];
+        };
+        AuthLogout: {
+            /** @description Identity provider end-session URL to send the browser to */
+            redirect_url: string;
+        };
+        TripSummary: {
+            id: string;
+            city: string;
+            days: number;
+            status: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            latest_run?: components["schemas"]["TripListRun"];
+            latest_version?: components["schemas"]["TripListVersion"];
+        };
+        TripListRun: {
+            id: string;
+            status: string;
+            stage: string;
+        };
+        TripListVersion: {
+            seq: number;
+            status: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        TripList: {
+            trips: components["schemas"]["TripSummary"][];
+        };
         CreateTripRequest: {
             input: string;
             /** @enum {string} */
@@ -477,6 +590,41 @@ export interface components {
             /** Format: date-time */
             fetched_at?: string;
         };
+        /** @description 一段交通几何，polyline 为 [lng, lat] 坐标序列 */
+        TransitLeg: {
+            /** @enum {string} */
+            mode: "walk" | "transit" | "drive";
+            line_name?: string;
+            from_stop?: string;
+            to_stop?: string;
+            distance_m?: number;
+            duration_min?: number;
+            cost_yuan?: number;
+            polyline?: number[][];
+            estimated?: boolean;
+        };
+        /** @description 两个相邻行程块之间的交通；legs 缺失时前端按直线虚线回退 */
+        Transport: {
+            mode?: string;
+            from_poi_id?: string;
+            to_poi_id?: string;
+            distance_m?: number;
+            duration_min?: number;
+            cost_yuan?: number;
+            estimated?: boolean;
+            legs?: components["schemas"]["TransitLeg"][];
+        };
+        /** @description 行程住宿摘要（行程 JSON 的 lodging 字段） */
+        Lodging: {
+            hotel: components["schemas"]["Hotel"];
+            nights?: number;
+            nightly_yuan?: number;
+            total_yuan?: number;
+            anchor_days?: number[];
+            include_in_budget: boolean;
+            price_estimated?: boolean;
+            source?: string;
+        };
         GuideSignal: {
             poi_id?: string;
             weight?: number;
@@ -527,8 +675,15 @@ export interface components {
             events_url: string;
         };
         ResumeRequest: {
-            /** @enum {string} */
-            action: "provide_constraints" | "accept" | "reject" | "resolve_research";
+            /**
+             * @description - `provide_constraints`: 补充缺失信息后重新规划
+             *     - `accept`: 接受当前方案
+             *     - `reject`: 首次方案拒绝时取消；调整提案拒绝时恢复基线方案并保持 awaiting_user，阶段为 proposal_rejected
+             *     - `revise`: 携带修改建议在同一运行上转为调整模式
+             *     - `resolve_research`: 回答待确认的研究问题
+             * @enum {string}
+             */
+            action: "provide_constraints" | "accept" | "reject" | "revise" | "resolve_research";
             input?: string;
             constraints?: {
                 [key: string]: unknown;
@@ -597,11 +752,29 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description Authentication is enabled and no valid session was provided */
+        Unauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Authenticated but missing the required role */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
     parameters: {
         TripID: string;
         RunID: string;
-        /** @description The Authorization bearer header is also accepted */
+        /** @description Alternative to an admin session; the Authorization bearer header is also accepted */
         AdminToken: string;
     };
     requestBodies: never;
@@ -671,6 +844,130 @@ export interface operations {
             };
         };
     };
+    getAuthMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authentication toggle and current user, never cached */
+            200: {
+                headers: {
+                    /** @description Always no-store */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthMe"];
+                };
+            };
+        };
+    };
+    startLogin: {
+        parameters: {
+            query?: {
+                /** @description Same-site path to return to after login */
+                return_to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to the identity provider */
+            302: {
+                headers: {
+                    Location?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    oidcCallback: {
+        parameters: {
+            query: {
+                code: string;
+                state: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to the web app or login page with an error code */
+            302: {
+                headers: {
+                    Location?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Identity provider logout URL when available */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthLogout"];
+                };
+            };
+            /** @description Session cleared without an identity provider logout URL */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listTrips: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Trip summaries, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TripList"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
     createTrip: {
         parameters: {
             query?: never;
@@ -694,6 +991,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Error"];
             413: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
@@ -718,6 +1017,7 @@ export interface operations {
                     "application/json": components["schemas"]["Trip"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["Error"];
         };
     };
@@ -739,6 +1039,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["Error"];
         };
     };
@@ -764,6 +1065,8 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["Error"];
         };
     };
     getPlanVersion: {
@@ -788,6 +1091,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["Error"];
         };
     };
@@ -813,6 +1117,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             429: components["responses"]["Error"];
@@ -842,6 +1147,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
         };
@@ -871,6 +1177,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             429: components["responses"]["Error"];
@@ -901,6 +1208,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             413: components["responses"]["Error"];
@@ -927,6 +1235,7 @@ export interface operations {
                     "application/json": components["schemas"]["Share"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
         };
@@ -956,6 +1265,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
         };
@@ -980,6 +1290,7 @@ export interface operations {
                     "application/json": components["schemas"]["RunAction"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["Error"];
         };
     };
@@ -1010,6 +1321,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["Error"];
             503: components["responses"]["Error"];
         };
@@ -1040,9 +1352,9 @@ export interface operations {
     listEvalCases: {
         parameters: {
             query?: never;
-            header: {
-                /** @description The Authorization bearer header is also accepted */
-                "X-Admin-Token": components["parameters"]["AdminToken"];
+            header?: {
+                /** @description Alternative to an admin session; the Authorization bearer header is also accepted */
+                "X-Admin-Token"?: components["parameters"]["AdminToken"];
             };
             path?: never;
             cookie?: never;
@@ -1060,16 +1372,17 @@ export interface operations {
                     };
                 };
             };
-            401: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             503: components["responses"]["Error"];
         };
     };
     listEvalRuns: {
         parameters: {
             query?: never;
-            header: {
-                /** @description The Authorization bearer header is also accepted */
-                "X-Admin-Token": components["parameters"]["AdminToken"];
+            header?: {
+                /** @description Alternative to an admin session; the Authorization bearer header is also accepted */
+                "X-Admin-Token"?: components["parameters"]["AdminToken"];
             };
             path?: never;
             cookie?: never;
@@ -1087,16 +1400,17 @@ export interface operations {
                     };
                 };
             };
-            401: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             503: components["responses"]["Error"];
         };
     };
     startEval: {
         parameters: {
             query?: never;
-            header: {
-                /** @description The Authorization bearer header is also accepted */
-                "X-Admin-Token": components["parameters"]["AdminToken"];
+            header?: {
+                /** @description Alternative to an admin session; the Authorization bearer header is also accepted */
+                "X-Admin-Token"?: components["parameters"]["AdminToken"];
             };
             path?: never;
             cookie?: never;
@@ -1115,7 +1429,8 @@ export interface operations {
                     };
                 };
             };
-            401: components["responses"]["Error"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             503: components["responses"]["Error"];
         };
     };

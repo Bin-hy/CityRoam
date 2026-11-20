@@ -7,8 +7,23 @@ import (
 	"time"
 
 	"trippilot/internal/agent"
+	"trippilot/internal/domain"
 	"trippilot/internal/repo"
 )
+
+// planSnapshot keeps explanations inside the version plan JSON without a schema
+// change. Older readers ignore the extra field.
+type planSnapshot struct {
+	domain.Itinerary
+	Explanations []domain.Explanation `json:"explanations,omitempty"`
+}
+
+func encodeVersionPlan(snapshot agent.VersionSnapshot) (json.RawMessage, error) {
+	return json.Marshal(planSnapshot{
+		Itinerary:    snapshot.Plan,
+		Explanations: snapshot.Explanations,
+	})
+}
 
 // Store adapts the Postgres repository to agent.RunStore.
 type Store struct {
@@ -89,6 +104,34 @@ func (s *Store) UpdateRunStatus(ctx context.Context, runID, status, stage string
 	return nil
 }
 
+func (s *Store) UpdateRunMode(ctx context.Context, runID, mode string) error {
+	if err := s.store.UpdateRunMode(ctx, runID, mode); err != nil {
+		return fmt.Errorf("runstore: update mode: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetPlanVersion(ctx context.Context, tripID string, seq int) (agent.VersionState, error) {
+	version, err := s.store.GetPlanVersionBySeq(ctx, tripID, int32(seq))
+	if err != nil {
+		return agent.VersionState{}, err
+	}
+	var state agent.VersionState
+	state.Seq = int(version.Seq)
+	if err := json.Unmarshal(version.Plan, &state.Plan); err != nil {
+		return agent.VersionState{}, fmt.Errorf("runstore: decode plan: %w", err)
+	}
+	if err := json.Unmarshal(version.Constraints, &state.Constraints); err != nil {
+		return agent.VersionState{}, fmt.Errorf("runstore: decode constraints: %w", err)
+	}
+	if len(version.Violations) > 0 {
+		if err := json.Unmarshal(version.Violations, &state.Violations); err != nil {
+			return agent.VersionState{}, fmt.Errorf("runstore: decode violations: %w", err)
+		}
+	}
+	return state, nil
+}
+
 func record(run repo.Run) agent.RunRecord {
 	return agent.RunRecord{
 		ID:          run.ID,
@@ -118,7 +161,7 @@ func (s *Store) SaveVersion(ctx context.Context, runID string, snapshot agent.Ve
 	if err != nil {
 		return fmt.Errorf("runstore: get run for version: %w", err)
 	}
-	plan, err := json.Marshal(snapshot.Plan)
+	plan, err := encodeVersionPlan(snapshot)
 	if err != nil {
 		return fmt.Errorf("runstore: encode plan: %w", err)
 	}

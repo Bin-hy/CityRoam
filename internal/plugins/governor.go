@@ -118,11 +118,24 @@ type Governor struct {
 
 	mu   sync.Mutex
 	runs map[string]*runCounters
+
+	flightMu sync.Mutex
+	flights  map[string]*flight
 }
 
 type runCounters struct {
-	total  int
-	byTool map[string]int
+	total    int
+	observed int
+	byTool   map[string]int
+}
+
+// flight coalesces concurrent cache misses with the same key so only the
+// leader executes upstream. Followers reuse the leader's result.
+type flight struct {
+	done chan struct{}
+	out  json.RawMessage
+	code string
+	msg  string
 }
 
 type GovernorOption func(*Governor)
@@ -198,6 +211,7 @@ func NewGovernor(cache Cache, calls ToolCallStore, evidence EvidenceStore, event
 		now:            time.Now,
 		logger:         slog.Default(),
 		runs:           make(map[string]*runCounters),
+		flights:        make(map[string]*flight),
 	}
 	for name, limit := range defaultToolLimits {
 		g.toolLimits[name] = limit
@@ -245,33 +259,16 @@ func (g *Governor) call(ctx context.Context, tool agent.ResearchTool, input json
 		return errorEnvelope(CodeMissingRun, "missing run context"), nil
 	}
 	name := tool.Name()
-	callIndex, limitCode, limitMessage := g.reserve(run.RunID, name)
 	provider := name
 	if named, ok := tool.(ProviderNamer); ok && named.Provider() != "" {
 		provider = named.Provider()
 	}
-	if limitCode != "" {
-		g.record(ctx, run, name, callIndex, input, nil, limitCode, limitMessage, 0, false, 0)
-		g.publish(ctx, run.RunID, "plugin.tool_called", toolEvent{
-			Name: name, Provider: provider, CallIndex: callIndex, Status: "started",
-		})
-		g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
-			Name: name, Provider: provider, CallIndex: callIndex, Status: "error",
-		})
-		return errorEnvelope(limitCode, limitMessage), nil
-	}
-	cacheKey := ""
-	cacheTTL := time.Duration(0)
-	if keyer, ok := tool.(CacheKeyer); ok && g.cache != nil {
-		key, err := keyer.CacheKey(input)
-		if err == nil {
-			cacheKey = key
-			cacheTTL = keyer.CacheTTL()
-		}
-	}
+	callIndex := g.observe(run.RunID)
+	cacheKey, cacheTTL := g.cachePlan(tool, input)
+	query := queryFor(tool, input)
 
 	g.publish(ctx, run.RunID, "plugin.tool_called", toolEvent{
-		Name: name, Provider: provider, CallIndex: callIndex, Status: "started",
+		Name: name, Provider: provider, CallIndex: callIndex, Status: "started", Query: query,
 	})
 
 	if cacheKey != "" {
@@ -280,16 +277,163 @@ func (g *Governor) call(ctx context.Context, tool agent.ResearchTool, input json
 			g.record(ctx, run, name, callIndex, input, cached, "", "", latency, true, 0)
 			g.writeEvidence(ctx, run, tool, input, cached)
 			g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
-				Name: name, Provider: provider, CallIndex: callIndex, Status: "ok",
+				Name: name, Provider: provider, CallIndex: callIndex, Status: "ok", Query: query,
 				LatencyMS: latency.Milliseconds(), ResultCount: resultCount(tool, cached), Cached: true,
+				Preview: previewFor(tool, cached),
 			})
 			return cached, nil
 		}
+
+		shared, leader := g.joinFlight(cacheKey)
+		if !leader {
+			return g.followFlight(ctx, run, tool, input, name, provider, callIndex, query, start, shared)
+		}
+
+		code, message := g.reserve(run.RunID, name)
+		if code != "" {
+			latency := g.now().Sub(start)
+			g.record(ctx, run, name, callIndex, input, nil, code, message, latency, false, 0)
+			g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
+				Name: name, Provider: provider, CallIndex: callIndex, Status: "error", Query: query,
+				LatencyMS: latency.Milliseconds(),
+			})
+			g.resolveFlight(cacheKey, shared, nil, code, message)
+			return errorEnvelope(code, message), nil
+		}
+
+		output, callErr, attempts, callCtx, cancel := g.execute(ctx, tool, input, name, true)
+		defer cancel()
+		latency := g.now().Sub(start)
+		if callErr != nil {
+			code, message := classify(callCtx, callErr)
+			g.record(ctx, run, name, callIndex, input, nil, code, message, latency, false, attempts)
+			g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
+				Name: name, Provider: provider, CallIndex: callIndex, Status: "error", Query: query,
+				LatencyMS: latency.Milliseconds(), Attempts: attempts,
+			})
+			g.resolveFlight(cacheKey, shared, nil, code, message)
+			return errorEnvelope(code, message), nil
+		}
+
+		g.storeCache(ctx, cacheKey, provider, output, cacheTTL)
+		g.record(ctx, run, name, callIndex, input, output, "", "", latency, false, attempts)
+		g.writeEvidence(ctx, run, tool, input, output)
+		g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
+			Name: name, Provider: provider, CallIndex: callIndex, Status: "ok", Query: query,
+			LatencyMS: latency.Milliseconds(), ResultCount: resultCount(tool, output), Attempts: attempts,
+			Preview: previewFor(tool, output),
+		})
+		g.resolveFlight(cacheKey, shared, output, "", "")
+		return output, nil
 	}
 
-	callCtx, cancel := g.callerContext(ctx, name)
-	defer cancel()
+	code, message := g.reserve(run.RunID, name)
+	if code != "" {
+		g.record(ctx, run, name, callIndex, input, nil, code, message, 0, false, 0)
+		g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
+			Name: name, Provider: provider, CallIndex: callIndex, Status: "error", Query: query,
+		})
+		return errorEnvelope(code, message), nil
+	}
 
+	output, callErr, attempts, callCtx, cancel := g.execute(ctx, tool, input, name, false)
+	defer cancel()
+	latency := g.now().Sub(start)
+	if callErr != nil {
+		code, message := classify(callCtx, callErr)
+		g.record(ctx, run, name, callIndex, input, nil, code, message, latency, false, attempts)
+		g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
+			Name: name, Provider: provider, CallIndex: callIndex, Status: "error", Query: query,
+			LatencyMS: latency.Milliseconds(), Attempts: attempts,
+		})
+		return errorEnvelope(code, message), nil
+	}
+
+	g.record(ctx, run, name, callIndex, input, output, "", "", latency, false, attempts)
+	g.writeEvidence(ctx, run, tool, input, output)
+	g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
+		Name: name, Provider: provider, CallIndex: callIndex, Status: "ok", Query: query,
+		LatencyMS: latency.Milliseconds(), ResultCount: resultCount(tool, output), Attempts: attempts,
+		Preview: previewFor(tool, output),
+	})
+	return output, nil
+}
+
+func (g *Governor) cachePlan(tool agent.ResearchTool, input json.RawMessage) (string, time.Duration) {
+	keyer, ok := tool.(CacheKeyer)
+	if !ok || g.cache == nil {
+		return "", 0
+	}
+	key, err := keyer.CacheKey(input)
+	if err != nil {
+		return "", 0
+	}
+	return key, keyer.CacheTTL()
+}
+
+func (g *Governor) storeCache(ctx context.Context, key, provider string, output json.RawMessage, ttl time.Duration) {
+	if key == "" || ttl <= 0 || g.cache == nil {
+		return
+	}
+	if err := g.cache.Set(ctx, key, provider, output, ttl); err != nil {
+		g.logger.Warn("plugins: cache set failed", "error", err)
+	}
+}
+
+func (g *Governor) joinFlight(key string) (*flight, bool) {
+	g.flightMu.Lock()
+	defer g.flightMu.Unlock()
+	if existing, ok := g.flights[key]; ok {
+		return existing, false
+	}
+	shared := &flight{done: make(chan struct{})}
+	g.flights[key] = shared
+	return shared, true
+}
+
+func (g *Governor) resolveFlight(key string, shared *flight, output json.RawMessage, code, message string) {
+	g.flightMu.Lock()
+	defer g.flightMu.Unlock()
+	shared.out = output
+	shared.code = code
+	shared.msg = message
+	delete(g.flights, key)
+	close(shared.done)
+}
+
+func (g *Governor) followFlight(ctx context.Context, run RunContext, tool agent.ResearchTool, input json.RawMessage, name, provider string, callIndex int, query string, start time.Time, shared *flight) (json.RawMessage, error) {
+	select {
+	case <-shared.done:
+		latency := g.now().Sub(start)
+		if shared.code != "" {
+			g.record(ctx, run, name, callIndex, input, nil, shared.code, shared.msg, latency, false, 0)
+			g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
+				Name: name, Provider: provider, CallIndex: callIndex, Status: "error", Query: query,
+				LatencyMS: latency.Milliseconds(),
+			})
+			return errorEnvelope(shared.code, shared.msg), nil
+		}
+		g.record(ctx, run, name, callIndex, input, shared.out, "", "", latency, false, 0)
+		g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
+			Name: name, Provider: provider, CallIndex: callIndex, Status: "ok", Query: query,
+			LatencyMS: latency.Milliseconds(), ResultCount: resultCount(tool, shared.out), Coalesced: true,
+			Preview: previewFor(tool, shared.out),
+		})
+		return shared.out, nil
+	case <-ctx.Done():
+		code, message := classify(ctx, ctx.Err())
+		latency := g.now().Sub(start)
+		g.record(ctx, run, name, callIndex, input, nil, code, message, latency, false, 0)
+		g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
+			Name: name, Provider: provider, CallIndex: callIndex, Status: "error", Query: query,
+			LatencyMS: latency.Milliseconds(),
+		})
+		return errorEnvelope(code, message), nil
+	}
+}
+
+func (g *Governor) execute(ctx context.Context, tool agent.ResearchTool, input json.RawMessage, name string, detached bool) (json.RawMessage, error, int, context.Context, context.CancelFunc) {
+	callCtx, cancel := g.toolContext(ctx, name, detached)
 	var (
 		output   json.RawMessage
 		callErr  error
@@ -300,7 +444,7 @@ func (g *Governor) call(ctx context.Context, tool agent.ResearchTool, input json
 		if callErr == nil {
 			break
 		}
-		if attempts == maxToolAttempts || !IsRetryable(callErr) || ctx.Err() != nil || callCtx.Err() != nil {
+		if attempts == maxToolAttempts || !IsRetryable(callErr) || callCtx.Err() != nil {
 			break
 		}
 		if g.retryDelay > 0 {
@@ -316,30 +460,7 @@ func (g *Governor) call(ctx context.Context, tool agent.ResearchTool, input json
 			}
 		}
 	}
-
-	latency := g.now().Sub(start)
-	if callErr != nil {
-		code, message := classify(callCtx, callErr)
-		g.record(ctx, run, name, callIndex, input, nil, code, message, latency, false, attempts)
-		g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
-			Name: name, Provider: provider, CallIndex: callIndex, Status: "error",
-			LatencyMS: latency.Milliseconds(), Attempts: attempts,
-		})
-		return errorEnvelope(code, message), nil
-	}
-
-	if cacheKey != "" && cacheTTL > 0 && g.cache != nil {
-		if err := g.cache.Set(ctx, cacheKey, provider, output, cacheTTL); err != nil {
-			g.logger.Warn("plugins: cache set failed", "tool", name, "error", err)
-		}
-	}
-	g.record(ctx, run, name, callIndex, input, output, "", "", latency, false, attempts)
-	g.writeEvidence(ctx, run, tool, input, output)
-	g.publish(ctx, run.RunID, "plugin.tool_completed", toolEvent{
-		Name: name, Provider: provider, CallIndex: callIndex, Status: "ok",
-		LatencyMS: latency.Milliseconds(), ResultCount: resultCount(tool, output), Attempts: attempts,
-	})
-	return output, nil
+	return output, callErr, attempts, callCtx, cancel
 }
 
 func (g *Governor) cached(ctx context.Context, key string) (json.RawMessage, bool) {
@@ -354,7 +475,7 @@ func (g *Governor) cached(ctx context.Context, key string) (json.RawMessage, boo
 	return value, true
 }
 
-func (g *Governor) reserve(runID, tool string) (int, string, string) {
+func (g *Governor) observe(runID string) int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	counter := g.runs[runID]
@@ -362,19 +483,30 @@ func (g *Governor) reserve(runID, tool string) (int, string, string) {
 		counter = &runCounters{byTool: make(map[string]int)}
 		g.runs[runID] = counter
 	}
-	next := counter.total + 1
+	counter.observed++
+	return counter.observed
+}
+
+func (g *Governor) reserve(runID, tool string) (string, string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	counter := g.runs[runID]
+	if counter == nil {
+		counter = &runCounters{byTool: make(map[string]int)}
+		g.runs[runID] = counter
+	}
 	if counter.total >= g.maxCalls {
-		return next, CodeToolCallLimit, fmt.Sprintf("run_limit: this run may call at most %d research tools", g.maxCalls)
+		return CodeToolCallLimit, fmt.Sprintf("run_limit: this run may call at most %d research tools", g.maxCalls)
 	}
 	if limit, ok := g.toolLimits[tool]; ok && counter.byTool[tool] >= limit {
-		return next, CodeToolCallLimit, fmt.Sprintf("tool_limit: %s may be called at most %d times per run", tool, limit)
+		return CodeToolCallLimit, fmt.Sprintf("tool_limit: %s may be called at most %d times per run", tool, limit)
 	}
 	counter.total++
 	counter.byTool[tool]++
-	return next, "", ""
+	return "", ""
 }
 
-func (g *Governor) callerContext(ctx context.Context, tool string) (context.Context, context.CancelFunc) {
+func (g *Governor) toolContext(ctx context.Context, tool string, detached bool) (context.Context, context.CancelFunc) {
 	timeout := g.timeout
 	if configured, ok := g.toolTimeouts[tool]; ok {
 		timeout = configured
@@ -387,7 +519,11 @@ func (g *Governor) callerContext(ctx context.Context, tool string) (context.Cont
 	if timeout <= 0 {
 		timeout = time.Nanosecond
 	}
-	return context.WithTimeout(ctx, timeout)
+	base := ctx
+	if detached {
+		base = context.WithoutCancel(ctx)
+	}
+	return context.WithTimeout(base, timeout)
 }
 
 func classify(callCtx context.Context, err error) (string, string) {
@@ -495,14 +631,17 @@ func (g *Governor) publish(ctx context.Context, runID, typ string, payload toolE
 }
 
 type toolEvent struct {
-	Name        string `json:"name"`
-	Provider    string `json:"provider"`
-	CallIndex   int    `json:"call_index"`
-	Status      string `json:"status"`
-	LatencyMS   int64  `json:"latency_ms,omitempty"`
-	ResultCount int    `json:"result_count,omitempty"`
-	Cached      bool   `json:"cached,omitempty"`
-	Attempts    int    `json:"attempts,omitempty"`
+	Name        string         `json:"name"`
+	Provider    string         `json:"provider"`
+	CallIndex   int            `json:"call_index"`
+	Status      string         `json:"status"`
+	Query       string         `json:"query,omitempty"`
+	LatencyMS   int64          `json:"latency_ms,omitempty"`
+	ResultCount int            `json:"result_count,omitempty"`
+	Cached      bool           `json:"cached,omitempty"`
+	Coalesced   bool           `json:"coalesced,omitempty"`
+	Attempts    int            `json:"attempts,omitempty"`
+	Preview     []EventPreview `json:"preview,omitempty"`
 }
 
 func resultCount(tool agent.ResearchTool, output json.RawMessage) int {

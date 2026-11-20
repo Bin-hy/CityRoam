@@ -226,7 +226,7 @@ func TestAPIIntegrationPlugins(t *testing.T) {
 		rec = httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/meta", nil))
 		meta := rec.Body.String()
-		if !strings.Contains(meta, `"plugins":{"hotels":{"enabled":true},"guides":{"enabled":false,"disabled_reason":"GUIDE_SEARCH_API_KEY is empty"}}`) {
+		if !strings.Contains(meta, `"plugins":{"hotels":{"enabled":true},"guides":{"enabled":false,"disabled_reason":"GUIDE_SEARCH_API_KEY is empty"},"weather":{"enabled":false}}`) {
 			t.Fatalf("meta = %s", meta)
 		}
 

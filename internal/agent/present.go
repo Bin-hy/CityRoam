@@ -133,7 +133,8 @@ func mergeExplanations(plan domain.Itinerary, provided []domain.Explanation) []d
 	return out
 }
 
-func explanationFallback(dayNumber int, block domain.Block) string {	title := strings.TrimSpace(block.Title)
+func explanationFallback(dayNumber int, block domain.Block) string {
+	title := strings.TrimSpace(block.Title)
 	if title == "" {
 		title = "该地点"
 	}

@@ -1,4 +1,4 @@
-ARG GO_IMAGE=golang:1.24-alpine
+ARG GO_IMAGE=golang:1.25-alpine
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
 FROM ${GO_IMAGE} AS build
@@ -20,6 +20,7 @@ WORKDIR /app
 COPY --from=build /out/api /app/api
 COPY --from=build /out/healthcheck /app/healthcheck
 COPY --from=build /src/eval /app/eval
+COPY --from=build /src/skills /app/skills
 
 USER nonroot:nonroot
 EXPOSE 8080

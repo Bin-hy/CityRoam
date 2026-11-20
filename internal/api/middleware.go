@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"trippilot/internal/auth"
 )
 
 type contextKey int
@@ -38,6 +40,20 @@ func RequestID(next http.Handler) http.Handler {
 func RequestIDFrom(ctx context.Context) string {
 	id, _ := ctx.Value(requestIDKey).(string)
 	return id
+}
+
+// RequestLogger attaches a logger carrying request_id so downstream services
+// emit request-scoped auth audit events.
+func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := auth.WithLogger(r.Context(), logger.With("request_id", RequestIDFrom(r.Context())))
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
 }
 
 func validRequestID(id string) bool {
@@ -115,14 +131,26 @@ type rateWindow struct {
 	count int
 }
 
-// RateLimit allows limit requests per IP per fixed one-hour window.
+// RateLimit allows limit requests per key per fixed one-hour window.
 func RateLimit(limit int, now func() time.Time) func(http.Handler) http.Handler {
+	return RateLimitBy(limit, now, func(r *http.Request) string {
+		return "ip:" + clientIP(r)
+	})
+}
+
+// RateLimitBy buckets requests by keyFn, which lets authenticated calls use
+// the user identity instead of a shared proxy address.
+func RateLimitBy(limit int, now func() time.Time, keyFn func(*http.Request) string) func(http.Handler) http.Handler {
 	if now == nil {
 		now = time.Now
+	}
+	if keyFn == nil {
+		keyFn = func(r *http.Request) string { return "ip:" + clientIP(r) }
 	}
 	limiter := &rateLimiter{
 		limit:   limit,
 		now:     now,
+		keyFn:   keyFn,
 		windows: make(map[string]*rateWindow),
 	}
 	return limiter.middleware
@@ -131,6 +159,7 @@ func RateLimit(limit int, now func() time.Time) func(http.Handler) http.Handler 
 type rateLimiter struct {
 	limit   int
 	now     func() time.Time
+	keyFn   func(*http.Request) string
 	mu      sync.Mutex
 	windows map[string]*rateWindow
 }
@@ -146,17 +175,17 @@ func (l *rateLimiter) middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		ip := clientIP(r)
+		key := l.keyFn(r)
 		now := l.now()
 
 		l.mu.Lock()
 		if len(l.windows) > rateSweepThreshold {
 			l.sweep(now)
 		}
-		window, ok := l.windows[ip]
+		window, ok := l.windows[key]
 		if !ok {
 			window = &rateWindow{start: now}
-			l.windows[ip] = window
+			l.windows[key] = window
 		}
 		if now.Sub(window.start) >= rateWindowDuration {
 			window.start = now

@@ -51,6 +51,14 @@ func TestResume(t *testing.T) {
 				},
 			},
 			{
+				name: "revise", body: `{"action":"revise","input":" 第二天轻松点 "}`, kind: agent.ResumeRevise, status: agent.StatusQueued,
+				check: func(t *testing.T, action agent.ResumeAction) {
+					if action.Kind != agent.ResumeRevise || action.Input != "第二天轻松点" {
+						t.Fatalf("action = %+v", action)
+					}
+				},
+			},
+			{
 				name: "provide constraints", body: `{"action":"provide_constraints","input":"下周出发","constraints":{"start_date":"2026-11-23"}}`,
 				kind: agent.ResumeSupplement, status: agent.StatusQueued,
 				check: func(t *testing.T, action agent.ResumeAction) {
@@ -65,7 +73,7 @@ func TestResume(t *testing.T) {
 		}
 		for _, tc := range cases {
 			store, run := runFixture(t, agent.StatusAwaitingUser)
-			runner := &fakeRunner{}
+			runner := &fakeRunner{store: store}
 			router := tripRouter(store, runner)
 
 			rec := httptest.NewRecorder()
@@ -87,9 +95,31 @@ func TestResume(t *testing.T) {
 		}
 	})
 
+	t.Run("reports the stored status after a proposal reject", func(t *testing.T) {
+		store, run := runFixture(t, agent.StatusAwaitingUser)
+		runner := &fakeRunner{
+			store:        store,
+			resumeStatus: map[agent.ResumeKind]string{agent.ResumeReject: agent.StatusAwaitingUser},
+		}
+		router := tripRouter(store, runner)
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/runs/"+run.ID+"/resume", strings.NewReader(`{"action":"reject"}`)))
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		var body runActionResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.Status != agent.StatusAwaitingUser {
+			t.Fatalf("body = %+v", body)
+		}
+	})
+
 	t.Run("accepts constraints without free text", func(t *testing.T) {
 		store, run := runFixture(t, agent.StatusAwaitingUser)
-		runner := &fakeRunner{}
+		runner := &fakeRunner{store: store}
 		router := tripRouter(store, runner)
 
 		rec := httptest.NewRecorder()
@@ -105,7 +135,7 @@ func TestResume(t *testing.T) {
 
 	t.Run("rejects invalid bodies and missing runs", func(t *testing.T) {
 		store, run := runFixture(t, agent.StatusAwaitingUser)
-		runner := &fakeRunner{}
+		runner := &fakeRunner{store: store}
 		router := tripRouter(store, runner)
 
 		cases := []struct {
@@ -117,6 +147,8 @@ func TestResume(t *testing.T) {
 			{"unknown action", run.ID, `{"action":"retry"}`, http.StatusBadRequest},
 			{"empty supplement", run.ID, `{"action":"provide_constraints"}`, http.StatusBadRequest},
 			{"bad constraints", run.ID, `{"action":"provide_constraints","constraints":[]}`, http.StatusBadRequest},
+			{"empty revise", run.ID, `{"action":"revise","input":"  "}`, http.StatusBadRequest},
+			{"overlong revise", run.ID, `{"action":"revise","input":"` + strings.Repeat("改", maxInputRunes+1) + `"}`, http.StatusBadRequest},
 			{"bad json", run.ID, `{"action":`, http.StatusBadRequest},
 			{"missing run", "nope", `{"action":"accept"}`, http.StatusNotFound},
 		}
@@ -151,7 +183,7 @@ func TestResume(t *testing.T) {
 func TestCancel(t *testing.T) {
 	t.Run("cancels an active run", func(t *testing.T) {
 		store, run := runFixture(t, agent.StatusRunning)
-		runner := &fakeRunner{}
+		runner := &fakeRunner{store: store}
 		router := tripRouter(store, runner)
 
 		rec := httptest.NewRecorder()
@@ -174,7 +206,7 @@ func TestCancel(t *testing.T) {
 	t.Run("terminal runs stay immutable", func(t *testing.T) {
 		for _, status := range []string{agent.StatusCompleted, agent.StatusFailed, agent.StatusCancelled} {
 			store, run := runFixture(t, status)
-			runner := &fakeRunner{}
+			runner := &fakeRunner{store: store}
 			router := tripRouter(store, runner)
 
 			rec := httptest.NewRecorder()
@@ -247,7 +279,7 @@ func TestResumeResearch(t *testing.T) {
 		}
 		for _, tc := range cases {
 			store, run := researchRunFixture(t, true)
-			runner := &fakeRunner{}
+			runner := &fakeRunner{store: store}
 			router := tripRouter(store, runner)
 
 			rec := httptest.NewRecorder()
@@ -296,7 +328,7 @@ func TestResumeResearch(t *testing.T) {
 			} else {
 				store, run = runFixture(t, tc.status)
 			}
-			runner := &fakeRunner{}
+			runner := &fakeRunner{store: store}
 			router := tripRouter(store, runner)
 
 			rec := httptest.NewRecorder()

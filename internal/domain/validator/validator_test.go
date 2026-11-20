@@ -11,6 +11,18 @@ import (
 	"trippilot/internal/domain"
 )
 
+func TestCheckedCount(t *testing.T) {
+	if BaseRuleCount != 12 {
+		t.Fatalf("BaseRuleCount = %d", BaseRuleCount)
+	}
+	if got := CheckedCount(false); got != 12 {
+		t.Fatalf("checked without rain = %d", got)
+	}
+	if got := CheckedCount(true); got != 13 {
+		t.Fatalf("checked with rain = %d", got)
+	}
+}
+
 func TestC1(t *testing.T) {
 	museum := domain.POI{
 		ID:   "museum",

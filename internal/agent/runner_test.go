@@ -29,20 +29,22 @@ type acceptedVersion struct {
 }
 
 type fakeRunStore struct {
-	mu       sync.Mutex
-	runs     map[string]RunRecord
-	states   map[string][]byte
-	stages   map[string][]string
-	statuses []statusUpdate
-	versions []savedVersion
-	accepted []acceptedVersion
+	mu           sync.Mutex
+	runs         map[string]RunRecord
+	states       map[string][]byte
+	stages       map[string][]string
+	statuses     []statusUpdate
+	versions     []savedVersion
+	accepted     []acceptedVersion
+	planVersions map[string]map[int]VersionState
 }
 
 func newFakeRunStore(runs ...RunRecord) *fakeRunStore {
 	store := &fakeRunStore{
-		runs:   make(map[string]RunRecord, len(runs)),
-		states: make(map[string][]byte),
-		stages: make(map[string][]string),
+		runs:         make(map[string]RunRecord, len(runs)),
+		states:       make(map[string][]byte),
+		stages:       make(map[string][]string),
+		planVersions: make(map[string]map[int]VersionState),
 	}
 	for _, run := range runs {
 		store.runs[run.ID] = run
@@ -108,6 +110,43 @@ func (s *fakeRunStore) UpdateRunStatus(_ context.Context, runID, status, stage s
 	s.runs[runID] = run
 	s.statuses = append(s.statuses, statusUpdate{runID: runID, status: status, stage: stage})
 	return nil
+}
+
+func (s *fakeRunStore) UpdateRunMode(_ context.Context, runID, mode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run, ok := s.runs[runID]
+	if !ok {
+		return errors.New("run not found")
+	}
+	run.Mode = mode
+	s.runs[runID] = run
+	return nil
+}
+
+func (s *fakeRunStore) GetPlanVersion(_ context.Context, tripID string, seq int) (VersionState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	bySeq, ok := s.planVersions[tripID]
+	if !ok {
+		return VersionState{}, errors.New("trip not found")
+	}
+	state, ok := bySeq[seq]
+	if !ok {
+		return VersionState{}, errors.New("version not found")
+	}
+	return state, nil
+}
+
+func (s *fakeRunStore) seedPlanVersion(tripID string, state VersionState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	bySeq, ok := s.planVersions[tripID]
+	if !ok {
+		bySeq = make(map[int]VersionState)
+		s.planVersions[tripID] = bySeq
+	}
+	bySeq[state.Seq] = state
 }
 
 func (s *fakeRunStore) SaveVersion(_ context.Context, runID string, snapshot VersionSnapshot, status string) error {

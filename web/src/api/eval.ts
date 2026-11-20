@@ -2,7 +2,7 @@ import { apiRequest } from "./client";
 import type { EvalCase, EvalRun } from "./types";
 
 function adminHeaders(token: string): Record<string, string> {
-  return { "X-Admin-Token": token };
+  return token ? { "X-Admin-Token": token } : {};
 }
 
 export function listEvalCases(token: string): Promise<{ cases: EvalCase[] }> {

@@ -66,9 +66,15 @@ func handleResumeRun(deps Deps) http.HandlerFunc {
 			WriteError(w, r, &Error{Status: http.StatusInternalServerError, Code: "resume_failed", Message: "恢复运行失败"})
 			return
 		}
+		status := resumedFallback(action.Kind)
+		if saved, err := deps.Store.GetRun(r.Context(), run.ID); err == nil {
+			status = saved.Status
+		} else {
+			logError(deps.Logger, "reload resumed run", r, err)
+		}
 		writeJSON(w, http.StatusAccepted, runActionResponse{
 			RunID:  run.ID,
-			Status: resumedStatus(action.Kind),
+			Status: status,
 		})
 	}
 }
@@ -115,6 +121,15 @@ func resumeAction(req resumeRequest) (agent.ResumeAction, error) {
 		return agent.ResumeAction{Kind: agent.ResumeAccept}, nil
 	case "reject":
 		return agent.ResumeAction{Kind: agent.ResumeReject}, nil
+	case "revise":
+		input := strings.TrimSpace(req.Input)
+		if input == "" {
+			return agent.ResumeAction{}, &Error{Status: http.StatusBadRequest, Code: "invalid_input", Message: "缺少修改建议"}
+		}
+		if utf8.RuneCountInString(input) > maxInputRunes {
+			return agent.ResumeAction{}, &Error{Status: http.StatusBadRequest, Code: "invalid_input", Message: "修改建议过长"}
+		}
+		return agent.ResumeAction{Kind: agent.ResumeRevise, Input: input}, nil
 	case "resolve_research":
 		if req.ResearchChoice == nil || strings.TrimSpace(req.ResearchChoice.OptionID) == "" {
 			return agent.ResumeAction{}, &Error{Status: http.StatusBadRequest, Code: "invalid_research_choice", Message: "缺少研究选择"}
@@ -154,15 +169,11 @@ func invalidRunState() error {
 	}
 }
 
-func resumedStatus(kind agent.ResumeKind) string {
-	switch kind {
-	case agent.ResumeAccept:
+func resumedFallback(kind agent.ResumeKind) string {
+	if kind == agent.ResumeAccept {
 		return agent.StatusCompleted
-	case agent.ResumeReject:
-		return agent.StatusCancelled
-	default:
-		return agent.StatusQueued
 	}
+	return agent.StatusQueued
 }
 
 func terminalRunStatus(status string) bool {

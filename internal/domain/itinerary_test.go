@@ -144,3 +144,43 @@ func TestItineraryLodging(t *testing.T) {
 		t.Fatal("empty clone has lodging")
 	}
 }
+
+func TestItineraryCloneLegs(t *testing.T) {
+	original := Itinerary{
+		Days: []DayPlan{{
+			Date: "2026-11-20",
+			Blocks: []Block{{
+				ID: "b1",
+				Transport: &Transport{
+					Mode: TransportTransit,
+					Legs: []TransitLeg{
+						{Mode: TransportWalk, DistanceM: 300, Polyline: [][2]float64{{116.40, 39.90}, {116.41, 39.91}}},
+						{Mode: TransportTransit, LineName: "地铁 1 号线", DistanceM: 2400,
+							Polyline: [][2]float64{{116.41, 39.91}, {116.42, 39.92}, {116.43, 39.93}}},
+					},
+				},
+			}},
+		}},
+	}
+
+	clone := original.Clone()
+	clone.Days[0].Blocks[0].Transport.Legs[0].Polyline[0][0] = 0
+	clone.Days[0].Blocks[0].Transport.Legs[1].LineName = "changed"
+	clone.Days[0].Blocks[0].Transport.Legs = append(clone.Days[0].Blocks[0].Transport.Legs, TransitLeg{Mode: TransportWalk})
+
+	source := original.Days[0].Blocks[0].Transport.Legs
+	if len(source) != 2 {
+		t.Fatalf("clone aliased legs slice: %+v", source)
+	}
+	if source[0].Polyline[0][0] != 116.40 {
+		t.Fatalf("clone mutated polyline: %+v", source[0].Polyline)
+	}
+	if source[1].LineName != "地铁 1 号线" {
+		t.Fatalf("clone mutated leg: %+v", source[1])
+	}
+
+	plain := Itinerary{Days: []DayPlan{{Blocks: []Block{{ID: "b2", Transport: &Transport{Mode: TransportWalk}}}}}}
+	if legs := plain.Clone().Days[0].Blocks[0].Transport.Legs; legs != nil {
+		t.Fatalf("empty legs = %+v", legs)
+	}
+}

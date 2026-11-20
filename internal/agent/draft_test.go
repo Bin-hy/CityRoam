@@ -267,12 +267,13 @@ func TestDraftResearchFields(t *testing.T) {
 		research := &domain.ResearchBrief{
 			Accommodation: &domain.AccommodationBrief{Selected: &domain.Hotel{ID: "h1", Lat: 39.9, Lng: 116.4}},
 			Guides:        []domain.GuideSignal{{POIID: "p-0", Weight: 0.5, Note: "参考"}},
+			Weather:       []domain.WeatherDay{{Date: "2026-12-01", DayWeather: "小雨"}},
 		}
 		if _, err := nodes.Draft(context.Background(), DraftInput{Constraints: constraints, Candidates: candidates, Research: research}); err != nil {
 			t.Fatalf("draft: %v", err)
 		}
 		prompt := withResearch.calls[0].prompt
-		for _, want := range []string{"研究提示", "anchor_days", "guide_score", `"distance_to_lodging_km"`} {
+		for _, want := range []string{"研究提示", "anchor_days", "guide_score", `"distance_to_lodging_km"`, `"weather"`, `"小雨"`} {
 			if !strings.Contains(prompt, want) {
 				t.Fatalf("prompt missing %q:\n%s", want, prompt)
 			}

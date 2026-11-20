@@ -19,10 +19,13 @@ type Case struct {
 
 // Expected lists the observable properties a passing plan must have.
 type Expected struct {
-	Days      int      `json:"days"`
-	HardRules []string `json:"hard_rules,omitempty"`
-	MustVisit []string `json:"must_visit,omitempty"`
-	Avoid     []string `json:"avoid,omitempty"`
+	Days           int      `json:"days"`
+	HardRules      []string `json:"hard_rules,omitempty"`
+	MustVisit      []string `json:"must_visit,omitempty"`
+	Avoid          []string `json:"avoid,omitempty"`
+	ResearchStatus string   `json:"research_status,omitempty"`
+	Lodging        bool     `json:"lodging,omitempty"`
+	AwaitingCode   string   `json:"awaiting_code,omitempty"`
 }
 
 // LoadCases reads every *.json file in dir sorted by case id.
@@ -68,6 +71,11 @@ func (c Case) validate() error {
 	}
 	if c.Expected.Days < 1 || c.Expected.Days > 4 {
 		return fmt.Errorf("expected.days must be between 1 and 4")
+	}
+	switch c.Expected.ResearchStatus {
+	case "", "ok", "degraded", "skipped":
+	default:
+		return fmt.Errorf("expected.research_status must be ok, degraded or skipped")
 	}
 	return nil
 }

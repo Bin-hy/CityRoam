@@ -58,10 +58,136 @@ paths:
               schema:
                 $ref: "#/components/schemas/Meta"
 
+  /api/auth/me:
+    get:
+      operationId: getAuthMe
+      summary: Current authentication state
+      security: []
+      responses:
+        "200":
+          description: Authentication toggle and current user, never cached
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthMe"
+
+  /api/auth/login:
+    get:
+      operationId: startLogin
+      summary: Start the OIDC authorization code flow
+      security: []
+      parameters:
+        - name: return_to
+          in: query
+          required: false
+          description: Same-site path to return to after login
+          schema:
+            type: string
+            default: /
+      responses:
+        "302":
+          description: Redirect to the identity provider
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /api/auth/callback:
+    get:
+      operationId: oidcCallback
+      summary: OIDC callback that creates the session
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to the web app or login page with an error code
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /api/auth/logout:
+    post:
+      operationId: logout
+      summary: Delete the server-side session
+      security: []
+      responses:
+        "200":
+          description: Identity provider logout URL when available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthLogout"
+        "204":
+          description: Session cleared without an identity provider logout URL
+
   /api/trips:
+    get:
+      operationId: listTrips
+      summary: List trips owned by the current user
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Trip summaries, newest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripList"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
     post:
       operationId: createTrip
       summary: Create a trip and start planning
+      security:
+        - sessionCookie: []
       requestBody:
         required: true
         content:
@@ -77,6 +203,10 @@ paths:
                 $ref: "#/components/schemas/CreatedTrip"
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Error"
         "413":
           $ref: "#/components/responses/Error"
         "429":
@@ -88,6 +218,8 @@ paths:
     get:
       operationId: getTrip
       summary: Get the trip summary and latest artifacts
+      security:
+        - sessionCookie: []
       responses:
         "200":
           description: Trip summary
@@ -95,14 +227,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Trip"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/Error"
     delete:
       operationId: deleteTrip
       summary: Soft-delete a trip
+      security:
+        - sessionCookie: []
       responses:
         "204":
           description: Trip deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/Error"
 
@@ -112,6 +250,8 @@ paths:
     get:
       operationId: listPlanVersions
       summary: List plan versions, newest first
+      security:
+        - sessionCookie: []
       responses:
         "200":
           description: Plan versions
@@ -126,6 +266,10 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/PlanVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/Error"
 
   /api/trips/{tripID}/versions/{seq}:
     parameters:
@@ -139,6 +283,8 @@ paths:
     get:
       operationId: getPlanVersion
       summary: Get one plan version by sequence
+      security:
+        - sessionCookie: []
       responses:
         "200":
           description: Plan version
@@ -148,6 +294,8 @@ paths:
                 $ref: "#/components/schemas/PlanVersion"
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/Error"
 
@@ -163,6 +311,8 @@ paths:
     post:
       operationId: restorePlanVersion
       summary: Roll back to a previous version by copying it to a new accepted version
+      security:
+        - sessionCookie: []
       responses:
         "201":
           description: Restored plan version
@@ -172,6 +322,8 @@ paths:
                 $ref: "#/components/schemas/PlanVersion"
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/Error"
         "409":
@@ -197,6 +349,8 @@ paths:
     get:
       operationId: diffPlanVersions
       summary: Compare two plan versions, defaulting to the latest two
+      security:
+        - sessionCookie: []
       responses:
         "200":
           description: Version diff
@@ -206,6 +360,8 @@ paths:
                 $ref: "#/components/schemas/VersionDiff"
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Error"
         "404":
@@ -217,6 +373,8 @@ paths:
     post:
       operationId: createAdjustment
       summary: Start a scoped adjustment run from a base version
+      security:
+        - sessionCookie: []
       requestBody:
         required: true
         content:
@@ -232,6 +390,8 @@ paths:
                 $ref: "#/components/schemas/RunAccepted"
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/Error"
         "409":
@@ -245,6 +405,8 @@ paths:
     post:
       operationId: replanTrip
       summary: Re-run the pipeline with a full constraint patch from a base version
+      security:
+        - sessionCookie: []
       requestBody:
         required: true
         content:
@@ -260,6 +422,8 @@ paths:
                 $ref: "#/components/schemas/RunAccepted"
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/Error"
         "409":
@@ -275,6 +439,8 @@ paths:
     post:
       operationId: createShare
       summary: Share the latest accepted version
+      security:
+        - sessionCookie: []
       responses:
         "201":
           description: Share link created
@@ -282,6 +448,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Share"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/Error"
         "409":
@@ -292,7 +460,9 @@ paths:
       - $ref: "#/components/parameters/RunID"
     post:
       operationId: resumeRun
-      summary: Provide constraints, accept or reject an awaiting run
+      summary: Provide constraints, accept, reject or revise an awaiting run
+      security:
+        - sessionCookie: []
       requestBody:
         required: true
         content:
@@ -308,6 +478,8 @@ paths:
                 $ref: "#/components/schemas/RunAction"
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/Error"
         "409":
@@ -319,6 +491,8 @@ paths:
     post:
       operationId: cancelRun
       summary: Cancel a run; terminal runs are unchanged
+      security:
+        - sessionCookie: []
       responses:
         "202":
           description: Cancellation accepted
@@ -326,6 +500,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RunAction"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/Error"
 
@@ -349,6 +525,8 @@ paths:
     get:
       operationId: streamRunEvents
       summary: Stream run events over SSE
+      security:
+        - sessionCookie: []
       responses:
         "200":
           description: Server-sent events with heartbeats every two seconds
@@ -358,6 +536,8 @@ paths:
                 type: string
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/Error"
         "503":
@@ -387,6 +567,9 @@ paths:
     get:
       operationId: listEvalCases
       summary: List evaluation cases
+      security:
+        - sessionCookie: []
+        - adminToken: []
       parameters:
         - $ref: "#/components/parameters/AdminToken"
       responses:
@@ -404,7 +587,9 @@ paths:
                     items:
                       $ref: "#/components/schemas/EvalCase"
         "401":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "503":
           $ref: "#/components/responses/Error"
 
@@ -412,6 +597,9 @@ paths:
     get:
       operationId: listEvalRuns
       summary: List evaluation results
+      security:
+        - sessionCookie: []
+        - adminToken: []
       parameters:
         - $ref: "#/components/parameters/AdminToken"
       responses:
@@ -429,12 +617,17 @@ paths:
                     items:
                       $ref: "#/components/schemas/EvalRun"
         "401":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "503":
           $ref: "#/components/responses/Error"
     post:
       operationId: startEval
       summary: Start a full evaluation batch
+      security:
+        - sessionCookie: []
+        - adminToken: []
       parameters:
         - $ref: "#/components/parameters/AdminToken"
       responses:
@@ -451,7 +644,9 @@ paths:
                     type: string
                     const: started
         "401":
-          $ref: "#/components/responses/Error"
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "503":
           $ref: "#/components/responses/Error"
 
@@ -472,10 +667,22 @@ components:
     AdminToken:
       name: X-Admin-Token
       in: header
-      required: true
-      description: The Authorization bearer header is also accepted
+      required: false
+      description: Alternative to an admin session; the Authorization bearer header is also accepted
       schema:
         type: string
+
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: trippilot_session
+      description: Server-side session cookie issued by the OIDC callback; required when AUTH_ENABLED=true
+    adminToken:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
+      description: Static admin token for scripts and emergency access
 
   schemas:
     Health:
@@ -533,6 +740,24 @@ components:
               $ref: "#/components/schemas/PluginStatus"
             guides:
               $ref: "#/components/schemas/PluginStatus"
+        skills:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillPin"
+
+    SkillPin:
+      type: object
+      required:
+        - name
+        - version
+        - sha256
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        sha256:
+          type: string
 
     PluginStatus:
       type: object
@@ -543,6 +768,122 @@ components:
           type: boolean
         disabled_reason:
           type: string
+
+    AuthUser:
+      type: object
+      required:
+        - id
+        - role
+      properties:
+        id:
+          type: string
+        email:
+          type:
+            - string
+            - "null"
+        name:
+          type:
+            - string
+            - "null"
+        role:
+          type: string
+          enum:
+            - user
+            - admin
+
+    AuthMe:
+      type: object
+      required:
+        - enabled
+        - authenticated
+        - provider_name
+      properties:
+        enabled:
+          type: boolean
+          description: Whether login is mandatory
+        authenticated:
+          type: boolean
+        provider_name:
+          type: string
+        user:
+          $ref: "#/components/schemas/AuthUser"
+
+    AuthLogout:
+      type: object
+      required:
+        - redirect_url
+      properties:
+        redirect_url:
+          type: string
+          description: Identity provider end-session URL to send the browser to
+
+    TripSummary:
+      type: object
+      required:
+        - id
+        - city
+        - days
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        city:
+          type: string
+        days:
+          type: integer
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        latest_run:
+          $ref: "#/components/schemas/TripListRun"
+        latest_version:
+          $ref: "#/components/schemas/TripListVersion"
+
+    TripListRun:
+      type: object
+      required:
+        - id
+        - status
+        - stage
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        stage:
+          type: string
+
+    TripListVersion:
+      type: object
+      required:
+        - seq
+        - status
+        - created_at
+      properties:
+        seq:
+          type: integer
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    TripList:
+      type: object
+      required:
+        - trips
+      properties:
+        trips:
+          type: array
+          items:
+            $ref: "#/components/schemas/TripSummary"
 
     CreateTripRequest:
       type: object
@@ -795,6 +1136,90 @@ components:
           type: string
           format: date-time
 
+    TransitLeg:
+      type: object
+      description: 一段交通几何，polyline 为 [lng, lat] 坐标序列
+      required:
+        - mode
+      properties:
+        mode:
+          type: string
+          enum:
+            - walk
+            - transit
+            - drive
+        line_name:
+          type: string
+        from_stop:
+          type: string
+        to_stop:
+          type: string
+        distance_m:
+          type: integer
+        duration_min:
+          type: integer
+        cost_yuan:
+          type: integer
+        polyline:
+          type: array
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items:
+              type: number
+        estimated:
+          type: boolean
+
+    Transport:
+      type: object
+      description: 两个相邻行程块之间的交通；legs 缺失时前端按直线虚线回退
+      properties:
+        mode:
+          type: string
+        from_poi_id:
+          type: string
+        to_poi_id:
+          type: string
+        distance_m:
+          type: integer
+        duration_min:
+          type: integer
+        cost_yuan:
+          type: integer
+        estimated:
+          type: boolean
+        legs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransitLeg"
+
+    Lodging:
+      type: object
+      description: 行程住宿摘要（行程 JSON 的 lodging 字段）
+      required:
+        - hotel
+        - include_in_budget
+      properties:
+        hotel:
+          $ref: "#/components/schemas/Hotel"
+        nights:
+          type: integer
+        nightly_yuan:
+          type: integer
+        total_yuan:
+          type: integer
+        anchor_days:
+          type: array
+          items:
+            type: integer
+        include_in_budget:
+          type: boolean
+        price_estimated:
+          type: boolean
+        source:
+          type: string
+
     GuideSignal:
       type: object
       properties:
@@ -923,10 +1348,17 @@ components:
       properties:
         action:
           type: string
+          description: |
+            - `provide_constraints`: 补充缺失信息后重新规划
+            - `accept`: 接受当前方案
+            - `reject`: 首次方案拒绝时取消；调整提案拒绝时恢复基线方案并保持 awaiting_user，阶段为 proposal_rejected
+            - `revise`: 携带修改建议在同一运行上转为调整模式
+            - `resolve_research`: 回答待确认的研究问题
           enum:
             - provide_constraints
             - accept
             - reject
+            - revise
             - resolve_research
         input:
           type: string
@@ -1071,6 +1503,18 @@ components:
   responses:
     Error:
       description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Authentication is enabled and no valid session was provided
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Authenticated but missing the required role
       content:
         application/json:
           schema:

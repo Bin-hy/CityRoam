@@ -63,8 +63,11 @@ func TestWirePlugins(t *testing.T) {
 		if len(wiring.Tools) != 0 || len(wiring.Registry.ActiveTools()) != 0 {
 			t.Fatalf("active tools = %+v", wiring.Tools)
 		}
-		if len(wiring.Statuses) != 2 {
+		if len(wiring.Statuses) != 3 {
 			t.Fatalf("statuses = %+v", wiring.Statuses)
+		}
+		if wiring.Statuses[0].Name != "hotel" || wiring.Statuses[1].Name != "guide" || wiring.Statuses[2].Name != "weather" {
+			t.Fatalf("status names = %+v", wiring.Statuses)
 		}
 		for _, status := range wiring.Statuses {
 			if status.Enabled {
@@ -74,8 +77,11 @@ func TestWirePlugins(t *testing.T) {
 				t.Fatalf("missing reason: %+v", status)
 			}
 		}
-		if len(wiring.Disabled) != 2 {
+		if len(wiring.Disabled) != 3 {
 			t.Fatalf("disabled prompt hints = %+v", wiring.Disabled)
+		}
+		if wiring.Statuses[2].DisabledReason != "AMAP_WEB_KEY is empty" {
+			t.Fatalf("weather reason = %q", wiring.Statuses[2].DisabledReason)
 		}
 	})
 
@@ -96,10 +102,10 @@ func TestWirePlugins(t *testing.T) {
 		if len(wiring.Tools) != 1 || wiring.Tools[0].Name() != "search_hotels" {
 			t.Fatalf("tools = %+v", wiring.Tools)
 		}
-		if !wiring.Statuses[0].Enabled || wiring.Statuses[1].Enabled {
+		if !wiring.Statuses[0].Enabled || wiring.Statuses[1].Enabled || wiring.Statuses[2].Enabled {
 			t.Fatalf("statuses = %+v", wiring.Statuses)
 		}
-		if len(wiring.Disabled) != 1 || wiring.Disabled[0].Name != "search_travel_notes" {
+		if len(wiring.Disabled) != 2 || wiring.Disabled[0].Name != "search_travel_notes" || wiring.Disabled[1].Name != "get_weather" {
 			t.Fatalf("disabled = %+v", wiring.Disabled)
 		}
 	})
@@ -122,7 +128,7 @@ func TestWirePlugins(t *testing.T) {
 		if len(wiring.Tools) != 0 {
 			t.Fatalf("tools = %+v", wiring.Tools)
 		}
-		if wiring.Statuses[0].Enabled || wiring.Statuses[1].Enabled {
+		if wiring.Statuses[0].Enabled || wiring.Statuses[1].Enabled || wiring.Statuses[2].Enabled {
 			t.Fatalf("statuses = %+v", wiring.Statuses)
 		}
 		if !strings.Contains(wiring.Statuses[0].DisabledReason, "health") {
@@ -130,6 +136,9 @@ func TestWirePlugins(t *testing.T) {
 		}
 		if !strings.Contains(wiring.Statuses[1].DisabledReason, "GUIDE_SEARCH_API_KEY") {
 			t.Fatalf("guide reason = %q", wiring.Statuses[1].DisabledReason)
+		}
+		if !strings.Contains(wiring.Statuses[2].DisabledReason, "AMAP_WEB_KEY") {
+			t.Fatalf("weather reason = %q", wiring.Statuses[2].DisabledReason)
 		}
 		encoded, _ := json.Marshal(wiring.Statuses)
 		for _, leak := range []string{server.URL, "hotel-secret-token", "guide.internal.example"} {
@@ -152,6 +161,25 @@ func TestWirePlugins(t *testing.T) {
 		}
 		if !wiring.Statuses[1].Enabled {
 			t.Fatalf("statuses = %+v", wiring.Statuses)
+		}
+	})
+
+	t.Run("weather plugin registers when the map key is present", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.AMapWebKey = "map-key"
+		cfg.WeatherCacheTTL = time.Minute
+		cfg.WeatherToolTimeout = time.Second
+		cfg.WeatherMaxCallsPerRun = 1
+		wiring := WirePlugins(context.Background(), cfg, fakeStore{}, fakeEvents{}, testLogger())
+
+		if len(wiring.Tools) != 1 || wiring.Tools[0].Name() != "get_weather" {
+			t.Fatalf("tools = %+v", wiring.Tools)
+		}
+		if !wiring.Statuses[2].Enabled || wiring.Statuses[2].DisabledReason != "" {
+			t.Fatalf("weather status = %+v", wiring.Statuses[2])
+		}
+		if len(wiring.Disabled) != 2 {
+			t.Fatalf("disabled = %+v", wiring.Disabled)
 		}
 	})
 }

@@ -17,6 +17,7 @@ type ResearchBrief struct {
 	Status        ResearchStatus      `json:"status"`
 	Accommodation *AccommodationBrief `json:"accommodation,omitempty"`
 	Guides        []GuideSignal       `json:"guides,omitempty"`
+	Weather       []WeatherDay        `json:"weather,omitempty"`
 	Notes         []string            `json:"notes,omitempty"`
 	Warnings      []string            `json:"warnings,omitempty"`
 	ToolCalls     int                 `json:"tool_calls"`

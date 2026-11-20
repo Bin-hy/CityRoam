@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"trippilot/internal/agent"
+	"trippilot/internal/auth"
 	"trippilot/internal/domain"
 	"trippilot/internal/repo"
 )
@@ -38,6 +40,8 @@ type TripStore interface {
 	CreateRun(ctx context.Context, arg repo.CreateRunParams) (repo.Run, error)
 	SaveRunState(ctx context.Context, arg repo.UpdateRunStateParams) error
 	GetRun(ctx context.Context, id string) (repo.Run, error)
+	ListTripsByOwner(ctx context.Context, ownerID string, limit, offset int32) ([]repo.ListTripsByOwnerRow, error)
+	ListAnonymousTrips(ctx context.Context, limit, offset int32) ([]repo.ListAnonymousTripsRow, error)
 }
 
 // RunStarter is implemented by agent.Runner.
@@ -124,12 +128,23 @@ func handleCreateTrip(deps Deps) http.HandlerFunc {
 		if requestID != "" {
 			idempotency = &requestID
 		}
+		var ownerID *string
+		if deps.Auth.Enabled() {
+			principal, ok := auth.FromContext(r.Context())
+			if !ok {
+				WriteError(w, r, &Error{Status: http.StatusUnauthorized, Code: "unauthorized", Message: "请先登录"})
+				return
+			}
+			owner := principal.UserID
+			ownerID = &owner
+		}
 		trip, run, created, err := deps.Store.CreateTripAndRun(r.Context(), repo.CreateTripParams{
 			City:        city,
 			Days:        days,
 			Constraints: constraints,
 			Status:      "planning",
 			RequestID:   idempotency,
+			OwnerID:     ownerID,
 		}, repo.CreateRunParams{
 			Mode:        "initial",
 			Status:      agent.StatusQueued,
@@ -141,6 +156,12 @@ func handleCreateTrip(deps Deps) http.HandlerFunc {
 		if err != nil {
 			WriteError(w, r, errInternal(err))
 			return
+		}
+		if !created && deps.Auth.Enabled() {
+			if trip.OwnerID == nil || ownerID == nil || *trip.OwnerID != *ownerID {
+				WriteError(w, r, &Error{Status: http.StatusConflict, Code: "request_id_conflict", Message: "幂等键已被其他请求使用"})
+				return
+			}
 		}
 
 		if created {
@@ -453,4 +474,127 @@ func mapStoreError(err error) error {
 
 func errInternal(error) error {
 	return &Error{Status: http.StatusInternalServerError, Code: "internal", Message: "服务暂时不可用"}
+}
+
+type tripListRun struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Stage  string `json:"stage"`
+}
+
+type tripListVersion struct {
+	Seq       int32     `json:"seq"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type tripListItem struct {
+	ID            string           `json:"id"`
+	City          string           `json:"city"`
+	Days          int32            `json:"days"`
+	Status        string           `json:"status"`
+	CreatedAt     time.Time        `json:"created_at"`
+	UpdatedAt     time.Time        `json:"updated_at"`
+	LatestRun     *tripListRun     `json:"latest_run,omitempty"`
+	LatestVersion *tripListVersion `json:"latest_version,omitempty"`
+}
+
+type tripListResponse struct {
+	Trips []tripListItem `json:"trips"`
+}
+
+const (
+	defaultTripListLimit = 20
+	maxTripListLimit     = 100
+)
+
+// handleListTrips returns the caller's trips; with auth disabled it returns the
+// legacy owner-less trips so the old demo workflow still sees its history.
+func handleListTrips(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit, offset, err := parseTripListPaging(r)
+		if err != nil {
+			WriteError(w, r, err)
+			return
+		}
+		items := make([]tripListItem, 0, limit)
+		if deps.Auth.Enabled() {
+			principal, ok := auth.FromContext(r.Context())
+			if !ok {
+				WriteError(w, r, &Error{Status: http.StatusUnauthorized, Code: "unauthorized", Message: "请先登录"})
+				return
+			}
+			rows, err := deps.Store.ListTripsByOwner(r.Context(), principal.UserID, limit, offset)
+			if err != nil {
+				WriteError(w, r, errInternal(err))
+				return
+			}
+			for _, row := range rows {
+				items = append(items, tripListItem{
+					ID:            row.ID,
+					City:          row.City,
+					Days:          row.Days,
+					Status:        row.Status,
+					CreatedAt:     row.CreatedAt,
+					UpdatedAt:     row.UpdatedAt,
+					LatestRun:     decodeLatest[tripListRun](row.LatestRun),
+					LatestVersion: decodeLatest[tripListVersion](row.LatestVersion),
+				})
+			}
+		} else {
+			rows, err := deps.Store.ListAnonymousTrips(r.Context(), limit, offset)
+			if err != nil {
+				WriteError(w, r, errInternal(err))
+				return
+			}
+			for _, row := range rows {
+				items = append(items, tripListItem{
+					ID:            row.ID,
+					City:          row.City,
+					Days:          row.Days,
+					Status:        row.Status,
+					CreatedAt:     row.CreatedAt,
+					UpdatedAt:     row.UpdatedAt,
+					LatestRun:     decodeLatest[tripListRun](row.LatestRun),
+					LatestVersion: decodeLatest[tripListVersion](row.LatestVersion),
+				})
+			}
+		}
+		writeJSON(w, http.StatusOK, tripListResponse{Trips: items})
+	}
+}
+
+func parseTripListPaging(r *http.Request) (int32, int32, error) {
+	limit := int32(defaultTripListLimit)
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			return 0, 0, &Error{Status: http.StatusBadRequest, Code: "invalid_pagination", Message: "limit 必须是正整数"}
+		}
+		if value > maxTripListLimit {
+			value = maxTripListLimit
+		}
+		limit = int32(value)
+	}
+	var offset int32
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return 0, 0, &Error{Status: http.StatusBadRequest, Code: "invalid_pagination", Message: "offset 必须是非负整数"}
+		}
+		offset = int32(value)
+	}
+	return limit, offset, nil
+}
+
+// decodeLatest treats the SQL COALESCE output 'null' as absent.
+func decodeLatest[T any](raw json.RawMessage) *T {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var value T
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil
+	}
+	return &value
 }

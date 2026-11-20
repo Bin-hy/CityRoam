@@ -59,6 +59,17 @@ func (r *eventRecorder) Publish(ctx context.Context, runID string, typ string, p
 	return nil
 }
 
+func (r *eventRecorder) payloadFor(typ string) any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, event := range r.events {
+		if event.typ == typ {
+			return event.payload
+		}
+	}
+	return nil
+}
+
 func (r *eventRecorder) types() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

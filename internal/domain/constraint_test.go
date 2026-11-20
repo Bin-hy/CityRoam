@@ -186,6 +186,28 @@ func TestConstraintLodgingMerge(t *testing.T) {
 	}
 }
 
+func TestConstraintLodgingAnchorDaysMerge(t *testing.T) {
+	base := ConstraintSet{Lodging: LodgingConstraint{AnchorDays: []int{0, 1}}}
+	got := Merge(base, ConstraintSet{})
+	if len(got.Lodging.AnchorDays) != 2 || got.Lodging.AnchorDays[1] != 1 {
+		t.Fatalf("empty patch cleared anchor days: %+v", got.Lodging)
+	}
+
+	got = Merge(base, ConstraintSet{Lodging: LodgingConstraint{AnchorDays: []int{1}}})
+	if len(got.Lodging.AnchorDays) != 1 || got.Lodging.AnchorDays[0] != 1 {
+		t.Fatalf("anchor days merge = %+v", got.Lodging.AnchorDays)
+	}
+	base.Lodging.AnchorDays[0] = 9
+	if got.Lodging.AnchorDays[0] != 1 {
+		t.Fatalf("anchor days aliased base: %+v", got.Lodging.AnchorDays)
+	}
+
+	normalized := NormalizeAnchorDays([]int{2, 0, 2, -1, 5}, 3)
+	if len(normalized) != 2 || normalized[0] != 0 || normalized[1] != 2 {
+		t.Fatalf("normalized anchor days = %+v", normalized)
+	}
+}
+
 func TestConstraintLodgingJSONCompatibility(t *testing.T) {
 	var got ConstraintSet
 	if err := json.Unmarshal([]byte(`{"city":"beijing","days":2}`), &got); err != nil {

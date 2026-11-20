@@ -14,6 +14,7 @@ const (
 	walkModeMaxMeters    = 1500
 	estimatedTransitYuan = 2
 	earthRadiusMeters    = 6371000
+	maxDayPolylinePoints = 600
 )
 
 type Scheduler struct{}
@@ -191,6 +192,8 @@ func (s *Scheduler) Build(
 			dayEnd = blocks[len(blocks)-1].End
 		}
 
+		capDayPolylines(blocks)
+
 		dayCost, poiCount, walkingMeters := summarize(blocks)
 		itinerary.Days = append(itinerary.Days, domain.DayPlan{
 			Date:        draftDay.Date,
@@ -210,6 +213,44 @@ func (s *Scheduler) Build(
 	}
 
 	return itinerary, nil
+}
+
+// capDayPolylines degrades the largest polylines to straight segments until the
+// day fits the map payload budget.
+func capDayPolylines(blocks []domain.Block) {
+	total := 0
+	for _, block := range blocks {
+		if block.Transport == nil {
+			continue
+		}
+		for _, leg := range block.Transport.Legs {
+			total += len(leg.Polyline)
+		}
+	}
+	for total > maxDayPolylinePoints {
+		var largest *domain.TransitLeg
+		for index := range blocks {
+			if blocks[index].Transport == nil {
+				continue
+			}
+			legs := blocks[index].Transport.Legs
+			for legIndex := range legs {
+				if len(legs[legIndex].Polyline) <= 2 {
+					continue
+				}
+				if largest == nil || len(legs[legIndex].Polyline) > len(largest.Polyline) {
+					largest = &legs[legIndex]
+				}
+			}
+		}
+		if largest == nil {
+			return
+		}
+		points := largest.Polyline
+		total -= len(points) - 2
+		largest.Polyline = [][2]float64{points[0], points[len(points)-1]}
+		largest.Estimated = true
+	}
 }
 
 func lodgingAnchor(anchor *domain.LodgingAnchor, days int) (map[int]struct{}, domain.POI) {

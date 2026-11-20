@@ -10,8 +10,13 @@ import type {
   Share,
   SharedTrip,
   Trip,
+  TripList,
   VersionDiff,
 } from "./types";
+
+export function listTrips(limit = 20): Promise<TripList> {
+  return apiRequest<TripList>(`/api/trips?limit=${limit}`);
+}
 
 export function createTrip(body: CreateTripRequest): Promise<CreatedTrip> {
   return apiRequest<CreatedTrip>("/api/trips", { method: "POST", body });

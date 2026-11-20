@@ -24,12 +24,23 @@ type RunRecord struct {
 	State       json.RawMessage
 }
 
+// VersionState is the stored baseline an adjustment or a rejected proposal
+// restores from.
+type VersionState struct {
+	Seq         int
+	Plan        domain.Itinerary
+	Constraints domain.ConstraintSet
+	Violations  []domain.Violation
+}
+
 // RunStore is implemented by the Postgres store (or a fake in tests).
 type RunStore interface {
 	GetRun(ctx context.Context, runID string) (RunRecord, error)
 	ListRunsByStatus(ctx context.Context, statuses []string) ([]RunRecord, error)
 	SaveRunState(ctx context.Context, runID string, state json.RawMessage) error
 	UpdateRunStatus(ctx context.Context, runID, status, stage string) error
+	UpdateRunMode(ctx context.Context, runID, mode string) error
+	GetPlanVersion(ctx context.Context, tripID string, seq int) (VersionState, error)
 	SaveVersion(ctx context.Context, runID string, snapshot VersionSnapshot, status string) error
 	AcceptVersion(ctx context.Context, runID string, seq int) error
 }
@@ -41,6 +52,7 @@ const (
 	ResumeAccept     ResumeKind = "accept"
 	ResumeReject     ResumeKind = "reject"
 	ResumeResearch   ResumeKind = "resolve_research"
+	ResumeRevise     ResumeKind = "revise"
 )
 
 type ResearchChoice struct {
@@ -299,20 +311,10 @@ func (r *Runner) Resume(ctx context.Context, runID string, action ResumeAction) 
 		return nil
 
 	case ResumeReject:
-		state.Status = StatusCancelled
-		state.Stage = "rejected"
-		if err := r.saveState(ctx, state); err != nil {
-			return err
-		}
-		if err := r.store.UpdateRunStatus(ctx, runID, StatusCancelled, "rejected"); err != nil {
-			return fmt.Errorf("runner: reject run: %w", err)
-		}
-		if err := r.events.Publish(ctx, runID, "run.cancelled", map[string]any{
-			"reason": "rejected",
-		}); err != nil {
-			return fmt.Errorf("runner: publish run.cancelled: %w", err)
-		}
-		return nil
+		return r.rejectProposal(ctx, runID, state)
+
+	case ResumeRevise:
+		return r.resumeRevise(ctx, runID, state, action.Input)
 
 	case ResumeResearch:
 		return r.resumeResearch(ctx, runID, state, action)

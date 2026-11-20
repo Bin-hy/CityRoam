@@ -48,6 +48,35 @@ func TestShare(t *testing.T) {
 		}
 	})
 
+	t.Run("does not expose run skill state", func(t *testing.T) {
+		store, trip, _ := versionFixture(t, versionPlan(30))
+		runs := store.runs[trip.ID]
+		runs[0].State = []byte(`{"skill_pins":[{"name":"research-playbook","version":"1.0.0","sha256":"` + strings.Repeat("a", 64) + `"}],"skills":[{"name":"research-playbook","body":"SKILL-BODY-MARKER"}]}`)
+		store.runs[trip.ID] = runs
+		router := tripRouter(store, &fakeRunner{})
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/trips/"+trip.ID+"/share", nil))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		var created shareResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, created.URL, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("share status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		raw := rec.Body.String()
+		for _, leak := range []string{"SKILL-BODY-MARKER", "skill_pins", "skills", "research-playbook"} {
+			if strings.Contains(raw, leak) {
+				t.Fatalf("share leaks %q: %s", leak, raw)
+			}
+		}
+	})
+
 	t.Run("refuses to share before the plan is accepted", func(t *testing.T) {
 		store, trip, versions := versionFixture(t, versionPlan(30))
 		for index := range store.versions[trip.ID] {

@@ -19,7 +19,7 @@ func TestSearchNotesInput(t *testing.T) {
 	}
 	withDefaults := SearchNotesInput{Query: "北京"}
 	withDefaults.applyDefaults()
-	if withDefaults.Count != guideDefaultCount || withDefaults.Site != guideDefaultSite {
+	if withDefaults.Count != guideDefaultCount || withDefaults.Site != "" {
 		t.Fatalf("defaults = %+v", withDefaults)
 	}
 	if err := withDefaults.Validate(); err != nil {
@@ -88,7 +88,7 @@ func TestGuideTool(t *testing.T) {
 		t.Fatalf("body = %+v", gotBody)
 	}
 	query, _ := gotBody["query"].(string)
-	if query != "site:xiaohongshu.com 北京 胡同 美食" {
+	if query != "北京 胡同 美食" {
 		t.Fatalf("query = %s", query)
 	}
 
@@ -205,12 +205,16 @@ func TestGuideToolCacheKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key: %v", err)
 	}
-	second, _ := tool.CacheKey(json.RawMessage(`{"query":"北京 胡同","count":8,"site":"xiaohongshu.com"}`))
+	second, _ := tool.CacheKey(json.RawMessage(`{"query":"北京 胡同","count":8}`))
 	if first != second {
 		t.Fatalf("keys differ:\n%s\n%s", first, second)
 	}
-	if !strings.HasPrefix(first, "guide:v1:xiaohongshu.com:") || !strings.HasSuffix(first, ":8") {
+	if !strings.HasPrefix(first, "guide:v1::") || !strings.HasSuffix(first, ":8") {
 		t.Fatalf("key = %s", first)
+	}
+	scoped, _ := tool.CacheKey(json.RawMessage(`{"query":"北京 胡同","count":8,"site":"xiaohongshu.com"}`))
+	if scoped == first || !strings.HasPrefix(scoped, "guide:v1:xiaohongshu.com:") {
+		t.Fatalf("scoped key = %s", scoped)
 	}
 	if tool.CacheTTL() != 6*time.Hour {
 		t.Fatalf("ttl = %v", tool.CacheTTL())

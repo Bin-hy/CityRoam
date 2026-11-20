@@ -154,9 +154,33 @@ func (r *Runner) RunCase(ctx context.Context, item Case) (RunResult, error) {
 		if decodeErr != nil {
 			return finish(result, started, fmt.Errorf("decode awaiting state: %w", decodeErr))
 		}
+		if item.Expected.AwaitingCode != "" {
+			metrics := RunMetrics{LatencyMS: time.Since(started).Milliseconds()}
+			applyResearchMetrics(&metrics, state)
+			result.Metrics = metrics
+			code := ""
+			message := ""
+			if state.ResearchQuestion != nil {
+				code = state.ResearchQuestion.Code
+				message = state.ResearchQuestion.Message
+			}
+			if code == item.Expected.AwaitingCode {
+				result.Passed = true
+				result.Reason = "按预期等待用户确认：" + code + " " + message
+			} else {
+				result.Reason = fmt.Sprintf("应等待 %s，实际 %s", item.Expected.AwaitingCode, code)
+			}
+			r.record(ctx, result)
+			return result, nil
+		}
 		if state.Snapshot == nil && len(state.Plan.Days) == 0 {
 			result.Metrics = RunMetrics{LatencyMS: time.Since(started).Milliseconds()}
-			result.Reason = "等待用户补充约束：" + strings.Join(state.Missing, "、")
+			applyResearchMetrics(&result.Metrics, state)
+			if state.ResearchQuestion != nil {
+				result.Reason = "等待用户确认研究选项：" + state.ResearchQuestion.Code + " " + state.ResearchQuestion.Message
+			} else {
+				result.Reason = "等待用户补充约束：" + strings.Join(state.Missing, "、")
+			}
 			r.record(ctx, result)
 			return result, nil
 		}
@@ -180,6 +204,10 @@ func (r *Runner) RunCase(ctx context.Context, item Case) (RunResult, error) {
 	result.Passed = result.Completed && metrics.HardPass
 	if !result.Completed {
 		reasons = append(reasons, "运行未完成："+current.Status)
+	}
+	if item.Expected.AwaitingCode != "" {
+		result.Passed = false
+		reasons = append(reasons, "应等待用户确认："+item.Expected.AwaitingCode)
 	}
 	result.Reason = strings.Join(reasons, "；")
 	r.record(ctx, result)

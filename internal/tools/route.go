@@ -14,6 +14,9 @@ const (
 	transitSpeedKMH = 15.0
 	estimateBuffer  = 1.2
 	earthRadiusM    = 6371000.0
+
+	routeSimplifyMeters = 15.0
+	routeMaxLegPoints   = 60
 )
 
 type RouteService struct {
@@ -60,11 +63,35 @@ func (s *RouteService) fetch(ctx context.Context, from, to domain.POI, mode stri
 				Duration string `json:"duration"`
 				Distance string `json:"distance"`
 				Tolls    string `json:"tolls"`
+				Steps    []struct {
+					Polyline string `json:"polyline"`
+				} `json:"steps"`
 			} `json:"paths"`
 			Transits []struct {
 				Duration string `json:"duration"`
 				Distance string `json:"distance"`
 				Cost     string `json:"cost"`
+				Segments []struct {
+					Walking struct {
+						Steps []struct {
+							Polyline string `json:"polyline"`
+						} `json:"steps"`
+					} `json:"walking"`
+					Bus struct {
+						Buslines []struct {
+							Name          string `json:"name"`
+							Polyline      string `json:"polyline"`
+							Duration      string `json:"duration"`
+							Distance      string `json:"distance"`
+							DepartureStop struct {
+								Name string `json:"name"`
+							} `json:"departure_stop"`
+							ArrivalStop struct {
+								Name string `json:"name"`
+							} `json:"arrival_stop"`
+						} `json:"buslines"`
+					} `json:"bus"`
+				} `json:"segments"`
 			} `json:"transits"`
 		} `json:"route"`
 	}
@@ -84,6 +111,7 @@ func (s *RouteService) fetch(ctx context.Context, from, to domain.POI, mode stri
 		if mode == domain.TransportDrive {
 			transport.CostYuan = yuan(path.Tolls)
 		}
+		transport.Legs = buildPathLegs(mode, path.Steps, transport)
 		return transport, nil
 	}
 	if len(payload.Route.Transits) > 0 {
@@ -91,9 +119,91 @@ func (s *RouteService) fetch(ctx context.Context, from, to domain.POI, mode stri
 		transport.DurationMin = minutesFromSeconds(transit.Duration)
 		transport.DistanceM = meters(transit.Distance)
 		transport.CostYuan = yuan(transit.Cost)
+		transport.Legs = buildTransitLegs(transit.Segments)
 		return transport, nil
 	}
 	return domain.Transport{}, &APIError{InfoCode: "no_route", Info: "no route returned"}
+}
+
+func buildPathLegs(mode string, steps []struct {
+	Polyline string `json:"polyline"`
+}, transport domain.Transport) []domain.TransitLeg {
+	points := make([][2]float64, 0)
+	for _, step := range steps {
+		points = append(points, parsePolyline(step.Polyline)...)
+	}
+	points = finishLegPolyline(points)
+	if len(points) == 0 {
+		return nil
+	}
+	return []domain.TransitLeg{{
+		Mode:        mode,
+		DistanceM:   transport.DistanceM,
+		DurationMin: transport.DurationMin,
+		CostYuan:    transport.CostYuan,
+		Polyline:    points,
+	}}
+}
+
+func buildTransitLegs(segments []struct {
+	Walking struct {
+		Steps []struct {
+			Polyline string `json:"polyline"`
+		} `json:"steps"`
+	} `json:"walking"`
+	Bus struct {
+		Buslines []struct {
+			Name          string `json:"name"`
+			Polyline      string `json:"polyline"`
+			Duration      string `json:"duration"`
+			Distance      string `json:"distance"`
+			DepartureStop struct {
+				Name string `json:"name"`
+			} `json:"departure_stop"`
+			ArrivalStop struct {
+				Name string `json:"name"`
+			} `json:"arrival_stop"`
+		} `json:"buslines"`
+	} `json:"bus"`
+}) []domain.TransitLeg {
+	legs := make([]domain.TransitLeg, 0, len(segments))
+	for _, segment := range segments {
+		walkPoints := make([][2]float64, 0)
+		for _, step := range segment.Walking.Steps {
+			walkPoints = append(walkPoints, parsePolyline(step.Polyline)...)
+		}
+		if walkPoints = finishLegPolyline(walkPoints); len(walkPoints) > 0 {
+			legs = append(legs, domain.TransitLeg{Mode: domain.TransportWalk, Polyline: walkPoints})
+		}
+		if len(segment.Bus.Buslines) == 0 {
+			continue
+		}
+		line := segment.Bus.Buslines[0]
+		busPoints := finishLegPolyline(parsePolyline(line.Polyline))
+		if len(busPoints) == 0 {
+			continue
+		}
+		legs = append(legs, domain.TransitLeg{
+			Mode:        domain.TransportTransit,
+			LineName:    line.Name,
+			FromStop:    line.DepartureStop.Name,
+			ToStop:      line.ArrivalStop.Name,
+			DistanceM:   meters(line.Distance),
+			DurationMin: minutesFromSeconds(line.Duration),
+			Polyline:    busPoints,
+		})
+	}
+	if len(legs) == 0 {
+		return nil
+	}
+	return legs
+}
+
+func finishLegPolyline(points [][2]float64) [][2]float64 {
+	if len(points) == 0 {
+		return nil
+	}
+	return capPolyline(simplifyPolyline(points, routeSimplifyMeters), routeMaxLegPoints)
 }
 
 func estimateRoute(from, to domain.POI, mode string) domain.Transport {

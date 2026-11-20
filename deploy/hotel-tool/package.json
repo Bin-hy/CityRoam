@@ -1,0 +1,14 @@
+{
+  "name": "trippilot-hotel-tool",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FlyAI hotel search sidecar for TripPilot",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/server.test.mjs"
+  },
+  "dependencies": {
+    "@fly-ai/flyai-cli": "1.0.16"
+  }
+}

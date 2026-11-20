@@ -53,17 +53,27 @@ export function ShareDialog({ tripID }: { tripID: string }) {
         分享
       </Button>
       <Dialog open={open} onOpenChange={changeOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>分享行程</DialogTitle>
             <DialogDescription>生成无需登录的只读链接，只展示当前最终版本。</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            {share.isPending && <p className="text-sm text-muted-foreground">正在生成链接…</p>}
+          <div className="space-y-4">
+            {share.isPending && (
+              <p role="status" className="text-sm text-muted-foreground">
+                正在生成链接…
+              </p>
+            )}
             {error && <Alert variant="destructive">{error}</Alert>}
             {share.data && (
               <>
-                <Input aria-label="分享链接" readOnly value={link} onFocus={(event) => event.target.select()} />
+                <Input
+                  aria-label="分享链接"
+                  readOnly
+                  value={link}
+                  className="border-hairline bg-paper font-mono text-xs"
+                  onFocus={(event) => event.target.select()}
+                />
                 <div className="flex flex-wrap items-center gap-2">
                   <Button size="sm" onClick={() => void copyLink()}>
                     {copied ? <Check className="mr-1 h-4 w-4" /> : <Copy className="mr-1 h-4 w-4" />}
@@ -75,7 +85,7 @@ export function ShareDialog({ tripID }: { tripID: string }) {
                     </a>
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p className="border-t border-hairline pt-3 text-xs leading-relaxed text-muted-foreground">
                   分享页含 AI 生成标识与来源；链接可转发，但不包含你的账号信息。
                 </p>
               </>

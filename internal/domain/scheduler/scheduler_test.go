@@ -501,3 +501,58 @@ func testPOI(id, name, area string, lat, lng float64, ticket *int, suggested int
 		SuggestedMinutes: suggested,
 	}
 }
+
+func TestDayPolylineCap(t *testing.T) {
+	makeLeg := func(points int) domain.TransitLeg {
+		polyline := make([][2]float64, points)
+		for index := range polyline {
+			polyline[index] = [2]float64{116.4 + float64(index)*0.0001, 39.9 + float64(index)*0.0001}
+		}
+		return domain.TransitLeg{Mode: domain.TransportWalk, Polyline: polyline}
+	}
+
+	t.Run("degrades the largest legs until the day fits", func(t *testing.T) {
+		legs := make([]domain.TransitLeg, 12)
+		for index := range legs {
+			legs[index] = makeLeg(60)
+		}
+		blocks := []domain.Block{{ID: "b1", Transport: &domain.Transport{Mode: domain.TransportWalk, Legs: legs}}}
+		first := legs[0].Polyline[0]
+		last := legs[0].Polyline[len(legs[0].Polyline)-1]
+
+		capDayPolylines(blocks)
+
+		got := blocks[0].Transport.Legs
+		total := 0
+		intact := 0
+		degraded := 0
+		for _, leg := range got {
+			total += len(leg.Polyline)
+			if len(leg.Polyline) == 60 {
+				intact++
+			}
+			if leg.Estimated && len(leg.Polyline) == 2 {
+				degraded++
+			}
+		}
+		if total > maxDayPolylinePoints {
+			t.Fatalf("total points = %d", total)
+		}
+		if intact == 0 || degraded == 0 {
+			t.Fatalf("intact = %d degraded = %d", intact, degraded)
+		}
+		if got[0].Polyline[0] != first || got[0].Polyline[len(got[0].Polyline)-1] != last {
+			t.Fatalf("endpoints changed: %+v", got[0].Polyline)
+		}
+	})
+
+	t.Run("leaves a fit day untouched", func(t *testing.T) {
+		blocks := []domain.Block{{ID: "b1", Transport: &domain.Transport{Legs: []domain.TransitLeg{makeLeg(60), makeLeg(60)}}}}
+		capDayPolylines(blocks)
+		for _, leg := range blocks[0].Transport.Legs {
+			if len(leg.Polyline) != 60 || leg.Estimated {
+				t.Fatalf("leg changed: %+v", leg)
+			}
+		}
+	})
+}

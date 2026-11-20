@@ -1,10 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/api/client";
-import type { EvalCase, EvalRun } from "@/api/types";
+import type { AuthMe, EvalCase, EvalRun } from "@/api/types";
 import * as api from "@/api/eval";
+import { useAuth } from "@/features/auth/useAuth";
 import { EvalDashboard } from "./EvalDashboard";
 
 vi.mock("@/api/eval", () => ({
@@ -13,7 +15,11 @@ vi.mock("@/api/eval", () => ({
   startEval: vi.fn(),
 }));
 
-vi.mock("@/hooks/useRunStream", () => ({
+vi.mock("@/features/auth/useAuth", () => ({
+  useAuth: vi.fn(),
+}));
+
+vi.mock("@/features/eval/trace/useRunStream", () => ({
   useRunStream: () => ({
     status: "completed",
     stage: "present",
@@ -28,13 +34,32 @@ vi.mock("@/hooks/useRunStream", () => ({
   }),
 }));
 
-vi.mock("@/features/trace/RunTrace", () => ({
+vi.mock("@/features/eval/trace/RunTrace", () => ({
   RunTrace: () => <div>trace-panel</div>,
 }));
 
 const listEvalCases = vi.mocked(api.listEvalCases);
 const listEvalRuns = vi.mocked(api.listEvalRuns);
 const startEval = vi.mocked(api.startEval);
+const useAuthMock = vi.mocked(useAuth);
+
+function authState(me: AuthMe, isPending = false) {
+  return { data: me, isPending, isError: false } as unknown as ReturnType<typeof useAuth>;
+}
+
+const authDisabled = authState({ enabled: false, authenticated: false, provider_name: "统一登录" });
+const authAdmin = authState({
+  enabled: true,
+  authenticated: true,
+  provider_name: "统一登录",
+  user: { id: "u1", email: "admin@example.com", name: "管理员", role: "admin" },
+});
+const authUser = authState({
+  enabled: true,
+  authenticated: true,
+  provider_name: "统一登录",
+  user: { id: "u2", email: "user@example.com", name: "普通用户", role: "user" },
+});
 
 const cases: EvalCase[] = [
   { id: "case-a", input: "北京两天经典路线", expected: {}, tags: ["2d", "classic"], enabled: true },
@@ -67,7 +92,9 @@ function renderDashboard() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <EvalDashboard />
+      <MemoryRouter>
+        <EvalDashboard />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -82,6 +109,7 @@ describe("EvalDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionStorage.clear();
+    useAuthMock.mockReturnValue(authDisabled);
     listEvalCases.mockResolvedValue({ cases });
     listEvalRuns.mockResolvedValue({ runs });
     startEval.mockResolvedValue({ status: "started" });
@@ -157,5 +185,37 @@ describe("EvalDashboard", () => {
     await enterToken();
 
     expect(await screen.findByText(/当前部署未启用评测服务/)).toBeInTheDocument();
+  });
+
+  it("uses the admin session without asking for a token", async () => {
+    useAuthMock.mockReturnValue(authAdmin);
+    renderDashboard();
+
+    expect(await screen.findByText("case-a")).toBeInTheDocument();
+    expect(screen.queryByLabelText("管理员令牌")).not.toBeInTheDocument();
+    expect(listEvalCases).toHaveBeenCalledWith("");
+    expect(listEvalRuns).toHaveBeenCalledWith("");
+  });
+
+  it("tells non-admin users that the role is required", async () => {
+    useAuthMock.mockReturnValue(authUser);
+    renderDashboard();
+
+    expect(await screen.findByText(/评估面板仅对管理员开放/)).toBeInTheDocument();
+    expect(listEvalCases).not.toHaveBeenCalled();
+    expect(listEvalRuns).not.toHaveBeenCalled();
+  });
+
+  it("keeps the token flow for signed-out users when auth is enabled", async () => {
+    useAuthMock.mockReturnValue(
+      authState({ enabled: true, authenticated: false, provider_name: "统一登录" }),
+    );
+    renderDashboard();
+    expect(screen.getByLabelText("管理员令牌")).toBeInTheDocument();
+
+    await enterToken();
+
+    expect(await screen.findByText("case-a")).toBeInTheDocument();
+    expect(listEvalCases).toHaveBeenCalledWith("secret");
   });
 });

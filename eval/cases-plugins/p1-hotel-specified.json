@@ -1,0 +1,20 @@
+{
+  "case_id": "p1-hotel-specified",
+  "input": "北京两天，指定住全季北京天安门王府井酒店，总预算 1500 元，节奏正常。",
+  "tags": [
+    "plugin",
+    "hotel",
+    "specified",
+    "lodging"
+  ],
+  "expected": {
+    "days": 2,
+    "hard_rules": [
+      "C5",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": [],
+    "lodging": true
+  }
+}

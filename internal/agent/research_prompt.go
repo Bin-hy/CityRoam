@@ -1,8 +1,6 @@
 package agent
 
-import (
-	"encoding/json"
-)
+import "encoding/json"
 
 // ToolPromptInfo is the prompt-safe description of an enabled research tool.
 type ToolPromptInfo struct {
@@ -24,6 +22,7 @@ type ResearchPromptData struct {
 	Constraints json.RawMessage
 	Candidates  json.RawMessage
 	Tools       []ToolPromptInfo
+	SkillLines  []string
 	Disabled    []DisabledPlugin
 	Today       string
 	Nights      int

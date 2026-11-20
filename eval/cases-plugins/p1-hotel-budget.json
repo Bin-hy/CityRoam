@@ -1,0 +1,20 @@
+{
+  "case_id": "p1-hotel-budget",
+  "input": "北京三天，住宿想住地铁附近、评分高的酒店，总预算 2000 元，节奏正常。",
+  "tags": [
+    "plugin",
+    "hotel",
+    "budget",
+    "lodging"
+  ],
+  "expected": {
+    "days": 3,
+    "hard_rules": [
+      "C5",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": [],
+    "lodging": true
+  }
+}

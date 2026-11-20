@@ -1,0 +1,18 @@
+{
+  "case_id": "p2-guide-hutong",
+  "input": "北京一日游，喜欢胡同和本地小吃，参考下小红书上的玩法，节奏轻松。",
+  "tags": [
+    "plugin",
+    "guide",
+    "hutong",
+    "weight"
+  ],
+  "expected": {
+    "days": 1,
+    "hard_rules": [
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": []
+  }
+}

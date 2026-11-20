@@ -1,0 +1,18 @@
+{
+  "case_id": "p2-guide-no-match",
+  "input": "北京一日游，主要想看古代建筑和博物馆，参考网上攻略安排，预算 400 元。",
+  "tags": [
+    "plugin",
+    "guide",
+    "no-match"
+  ],
+  "expected": {
+    "days": 1,
+    "hard_rules": [
+      "C5",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": []
+  }
+}

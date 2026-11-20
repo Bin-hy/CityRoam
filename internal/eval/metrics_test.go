@@ -96,6 +96,69 @@ func TestEvaluateRejectsUnknownPOIAndAvoidedTag(t *testing.T) {
 	}
 }
 
+func TestEvaluateResearchMetricsDefaultToSkipped(t *testing.T) {
+	metrics, _ := Evaluate(Case{CaseID: "case-skip", Expected: Expected{Days: 1}}, sampleState())
+	if metrics.ResearchStatus != "skipped" || metrics.ResearchMS != 0 || metrics.ToolCalls != 0 || metrics.LodgingYuan != 0 || metrics.GuideMatches != 0 {
+		t.Fatalf("research metrics = %+v", metrics)
+	}
+}
+
+func TestEvaluateReadsResearchAndLodging(t *testing.T) {
+	state := sampleState()
+	state.Plan.Totals.LodgingYuan = 880
+	state.Research = &domain.ResearchBrief{
+		Status:     domain.ResearchOK,
+		DurationMS: 1250,
+		ToolCalls:  3,
+		Guides:     []domain.GuideSignal{{POIID: "forbidden-city", Weight: 0.7}},
+	}
+	metrics, _ := Evaluate(Case{CaseID: "case-research", Expected: Expected{Days: 1}}, state)
+	if metrics.ResearchStatus != "ok" || metrics.ResearchMS != 1250 || metrics.ToolCalls != 3 || metrics.LodgingYuan != 880 || metrics.GuideMatches != 1 {
+		t.Fatalf("research metrics = %+v", metrics)
+	}
+}
+
+func TestEvaluateChecksResearchExpectations(t *testing.T) {
+	state := sampleState()
+	state.Research = &domain.ResearchBrief{Status: domain.ResearchDegraded}
+	item := Case{CaseID: "case-research-expect", Expected: Expected{Days: 1, ResearchStatus: "ok", Lodging: true}}
+	metrics, reasons := Evaluate(item, state)
+	if metrics.HardPass {
+		t.Fatal("expected failure")
+	}
+	joined := strings.Join(reasons, "；")
+	if !strings.Contains(joined, "研究状态应为 ok") || !strings.Contains(joined, "住宿费用未计入预算") {
+		t.Fatalf("reasons = %v", reasons)
+	}
+}
+
+func TestMarkdownIncludesResearchColumns(t *testing.T) {
+	report := Report{
+		Results: []RunResult{{CaseID: "case-1", Metrics: RunMetrics{ResearchStatus: "skipped"}}},
+	}
+	body := Markdown(report)
+	for _, header := range []string{"研究", "研究耗时", "工具调用", "住宿", "攻略匹配"} {
+		if !strings.Contains(body, header) {
+			t.Fatalf("missing header %q in %s", header, body)
+		}
+	}
+	if !strings.Contains(body, "| case-1 |") || !strings.Contains(body, "| skipped |") {
+		t.Fatalf("missing skipped row in %s", body)
+	}
+}
+
+func TestDryRunMarkdownIncludesResearchColumns(t *testing.T) {
+	body := DryRunMarkdown([]Case{{CaseID: "case-1", Expected: Expected{Days: 2}}})
+	for _, header := range []string{"研究", "研究耗时", "工具调用", "住宿", "攻略匹配"} {
+		if !strings.Contains(body, header) {
+			t.Fatalf("missing header %q in %s", header, body)
+		}
+	}
+	if !strings.Contains(body, "| skipped | 0 ms | 0 | 0 | 0 |") {
+		t.Fatalf("missing default research cells in %s", body)
+	}
+}
+
 func TestSummarizeComputesP95(t *testing.T) {
 	results := make([]RunResult, 20)
 	for i := range results {

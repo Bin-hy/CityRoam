@@ -1,0 +1,17 @@
+{
+  "case_id": "p3-hotel-missing",
+  "input": "北京两天，指定住一家不存在的测试酒店，预算 1000 元，节奏正常。",
+  "tags": [
+    "plugin",
+    "hotel",
+    "missing",
+    "needs-input"
+  ],
+  "expected": {
+    "days": 2,
+    "hard_rules": [],
+    "must_visit": [],
+    "avoid": [],
+    "awaiting_code": "hotel_unconfirmed"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "skills": {
+    "museum-closure": {
+      "version": "1.0.0",
+      "sha256": "637db0dc41e0e0b30aeebd6694f2a3e527fd773741387bb8c6c8f0103a06ab77"
+    },
+    "rainy-day": {
+      "version": "1.0.0",
+      "sha256": "4c1bb952ec735e10a5bdfd0b77c2fc33dac31a6e98dcaf6488927f6b51b96819"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "case_id": "p1-hotel-anchor",
+  "input": "北京两天，住在前门附近的酒店，每天从酒店出发玩，预算 1200 元，节奏轻松。",
+  "tags": [
+    "plugin",
+    "hotel",
+    "anchor",
+    "lodging"
+  ],
+  "expected": {
+    "days": 2,
+    "hard_rules": [
+      "C4",
+      "C5"
+    ],
+    "must_visit": [],
+    "avoid": []
+  }
+}

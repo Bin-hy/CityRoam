@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 
@@ -131,9 +130,7 @@ func (n *Nodes) Adjust(ctx context.Context, in AdjustInput) (AdjustOutput, error
 	if err != nil {
 		return AdjustOutput{}, &NodeError{Code: "schedule_failed", Message: "调整后重新排期失败", Err: err}
 	}
-	if err := assertUntouchedDays(in.BasePlan, plan, affected); err != nil {
-		return AdjustOutput{}, err
-	}
+	plan = preserveUntouchedDays(in.BasePlan, plan, affected)
 	violations := n.validator.Validate(plan, in.Constraints, allowed, n.routes)
 
 	proposal := AdjustmentProposal{
@@ -358,23 +355,27 @@ func validateAdjustmentPatch(patch domain.DayPatch, affected []int, constraints 
 	return issues
 }
 
-func assertUntouchedDays(base, updated domain.Itinerary, affected []int) error {
-	touched := make(map[int]struct{}, len(affected))
-	for _, day := range affected {
-		touched[day] = struct{}{}
-	}
-	for day := 0; day < len(base.Days); day++ {
-		if _, ok := touched[day]; ok {
+func preserveUntouchedDays(base, updated domain.Itinerary, affected []int) domain.Itinerary {
+	for day := 0; day < len(updated.Days); day++ {
+		if containsInt(affected, day) || day >= len(base.Days) {
 			continue
 		}
-		if day >= len(updated.Days) || !reflect.DeepEqual(base.Days[day], updated.Days[day]) {
-			return &NodeError{
-				Code:    "adjustment_scope_violation",
-				Message: fmt.Sprintf("未受影响的天 %d 被改动", day+1),
+		updated.Days[day] = base.Days[day]
+	}
+	totals := domain.Totals{LodgingYuan: updated.Totals.LodgingYuan}
+	for _, day := range updated.Days {
+		totals.CostYuan += day.DayCostYuan
+		for _, block := range day.Blocks {
+			if block.Type == domain.BlockTypePOI {
+				totals.POICount++
+			}
+			if block.Transport != nil && block.Transport.Mode == domain.TransportWalk {
+				totals.WalkingKM += float64(block.Transport.DistanceM) / 1000
 			}
 		}
 	}
-	return nil
+	updated.Totals = totals
+	return updated
 }
 
 func adjustmentSummary(intent AdjustmentIntent, patch domain.DayPatch) string {

@@ -38,6 +38,30 @@ type AMapClient struct {
 
 type AMapOption func(*AMapClient)
 
+// flexString accepts both JSON strings and arrays, which AMap returns for
+// empty address/type fields ("address":[]).
+type flexString string
+
+func (s *flexString) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err == nil {
+		*s = flexString(value)
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal(data, &values); err != nil {
+		return err
+	}
+	if len(values) > 0 {
+		*s = flexString(values[0])
+	}
+	return nil
+}
+
+func (s flexString) String() string {
+	return string(s)
+}
+
 func WithAMapBaseURL(baseURL string) AMapOption {
 	return func(c *AMapClient) {
 		c.baseURL = strings.TrimRight(baseURL, "/")
@@ -75,7 +99,7 @@ type Geocode struct {
 	FormattedAddress string  `json:"formatted_address"`
 	Province         string  `json:"province"`
 	City             string  `json:"city"`
-	District         string  `json:"district"`
+	Level            string  `json:"level"`
 	Lat              float64 `json:"lat"`
 	Lng              float64 `json:"lng"`
 }
@@ -99,11 +123,11 @@ func (c *AMapClient) SearchPOI(ctx context.Context, keywords, city string) ([]AM
 
 	var payload struct {
 		POIs []struct {
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			Type     string `json:"type"`
-			Address  string `json:"address"`
-			Location string `json:"location"`
+			ID       string     `json:"id"`
+			Name     flexString `json:"name"`
+			Type     flexString `json:"type"`
+			Address  flexString `json:"address"`
+			Location string     `json:"location"`
 		} `json:"pois"`
 	}
 	if err := c.get(ctx, "/v3/place/text", params, &payload); err != nil {
@@ -118,9 +142,9 @@ func (c *AMapClient) SearchPOI(ctx context.Context, keywords, city string) ([]AM
 		}
 		pois = append(pois, AMapPOI{
 			ID:       item.ID,
-			Name:     item.Name,
-			Category: item.Type,
-			Address:  item.Address,
+			Name:     item.Name.String(),
+			Category: item.Type.String(),
+			Address:  item.Address.String(),
 			Lat:      lat,
 			Lng:      lng,
 		})
@@ -137,11 +161,11 @@ func (c *AMapClient) Geocode(ctx context.Context, address, city string) ([]Geoco
 
 	var payload struct {
 		Geocodes []struct {
-			FormattedAddress string `json:"formatted_address"`
-			Province         string `json:"province"`
-			City             string `json:"city"`
-			District         string `json:"district"`
-			Location         string `json:"location"`
+			FormattedAddress flexString `json:"formatted_address"`
+			Province         flexString `json:"province"`
+			City             flexString `json:"city"`
+			Level            flexString `json:"level"`
+			Location         string     `json:"location"`
 		} `json:"geocodes"`
 	}
 	if err := c.get(ctx, "/v3/geocode/geo", params, &payload); err != nil {
@@ -155,10 +179,10 @@ func (c *AMapClient) Geocode(ctx context.Context, address, city string) ([]Geoco
 			continue
 		}
 		results = append(results, Geocode{
-			FormattedAddress: item.FormattedAddress,
-			Province:         item.Province,
-			City:             item.City,
-			District:         item.District,
+			FormattedAddress: item.FormattedAddress.String(),
+			Province:         item.Province.String(),
+			City:             item.City.String(),
+			Level:            item.Level.String(),
 			Lat:              lat,
 			Lng:              lng,
 		})

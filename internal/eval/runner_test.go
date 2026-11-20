@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +91,67 @@ func TestRunCaseAcceptsPlanAndRecordsMetrics(t *testing.T) {
 	}
 	if !store.inserted[0].Passed || store.inserted[0].RunID == nil || *store.inserted[0].RunID != "run-1" {
 		t.Fatalf("inserted = %+v", store.inserted[0])
+	}
+}
+
+func TestRunCaseAcceptsExpectedResearchQuestion(t *testing.T) {
+	state := agent.TripState{
+		ResearchQuestion: &domain.ResearchQuestion{Code: "hotel_unconfirmed", Message: "未确认你指定的酒店"},
+		Research:         &domain.ResearchBrief{Status: domain.ResearchDegraded, ToolCalls: 2, DurationMS: 400},
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("encode state: %v", err)
+	}
+	store := &fakeStore{state: encoded}
+	runner := NewRunner(store, &fakeAgent{store: store},
+		WithPollInterval(time.Millisecond),
+		WithCaseTimeout(time.Second),
+	)
+
+	result, err := runner.RunCase(context.Background(), Case{
+		CaseID:   "case-3",
+		Input:    "北京两天，住不存在的酒店",
+		Expected: Expected{Days: 2, AwaitingCode: "hotel_unconfirmed"},
+	})
+	if err != nil {
+		t.Fatalf("RunCase: %v", err)
+	}
+	if !result.Passed || result.Completed {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.Metrics.ResearchStatus != "degraded" || result.Metrics.ToolCalls != 2 {
+		t.Fatalf("metrics = %+v", result.Metrics)
+	}
+	if store.accepted {
+		t.Fatal("awaited run must not be accepted")
+	}
+}
+
+func TestRunCaseRejectsUnexpectedAwaiting(t *testing.T) {
+	state := agent.TripState{
+		ResearchQuestion: &domain.ResearchQuestion{Code: "lodging_budget"},
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("encode state: %v", err)
+	}
+	store := &fakeStore{state: encoded}
+	runner := NewRunner(store, &fakeAgent{store: store},
+		WithPollInterval(time.Millisecond),
+		WithCaseTimeout(time.Second),
+	)
+
+	result, err := runner.RunCase(context.Background(), Case{
+		CaseID:   "case-4",
+		Input:    "北京两天",
+		Expected: Expected{Days: 2, AwaitingCode: "hotel_unconfirmed"},
+	})
+	if err != nil {
+		t.Fatalf("RunCase: %v", err)
+	}
+	if result.Passed || !strings.Contains(result.Reason, "hotel_unconfirmed") {
+		t.Fatalf("result = %+v", result)
 	}
 }
 

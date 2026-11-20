@@ -1,0 +1,20 @@
+{
+  "case_id": "p4-guide-timeout",
+  "input": "北京一日游，想参考网上的游玩攻略，预算 300 元，节奏轻松。",
+  "tags": [
+    "plugin",
+    "guide",
+    "timeout",
+    "degraded"
+  ],
+  "expected": {
+    "days": 1,
+    "hard_rules": [
+      "C5",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": [],
+    "research_status": "degraded"
+  }
+}

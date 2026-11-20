@@ -276,19 +276,19 @@ func TestResearchLoop(t *testing.T) {
 		}}
 		llm := &fakeToolLLM{responses: []ToolCompletion{
 			{ToolCalls: []ToolCall{
-				toolCall("c1", researchGuideTool, `{}`),
-				toolCall("c2", researchGuideTool, `{}`),
-				toolCall("c3", researchGuideTool, `{}`),
+				toolCall("c1", researchGuideTool, `{"query":"c1"}`),
+				toolCall("c2", researchGuideTool, `{"query":"c2"}`),
+				toolCall("c3", researchGuideTool, `{"query":"c3"}`),
 			}},
 			{ToolCalls: []ToolCall{
-				toolCall("c4", researchGuideTool, `{}`),
-				toolCall("c5", researchGuideTool, `{}`),
-				toolCall("c6", researchGuideTool, `{}`),
+				toolCall("c4", researchGuideTool, `{"query":"c4"}`),
+				toolCall("c5", researchGuideTool, `{"query":"c5"}`),
+				toolCall("c6", researchGuideTool, `{"query":"c6"}`),
 			}},
 			{ToolCalls: []ToolCall{
-				toolCall("c7", researchGuideTool, `{}`),
-				toolCall("c8", researchGuideTool, `{}`),
-				toolCall("c9", researchGuideTool, `{}`),
+				toolCall("c7", researchGuideTool, `{"query":"c7"}`),
+				toolCall("c8", researchGuideTool, `{"query":"c8"}`),
+				toolCall("c9", researchGuideTool, `{"query":"c9"}`),
 			}},
 		}}
 		events := &eventRecorder{}
@@ -639,6 +639,30 @@ func TestResearchSpecifiedHotel(t *testing.T) {
 			t.Fatalf("total = %d", brief.Accommodation.TotalYuan)
 		}
 	})
+
+	t.Run("falls back to a priced tool result when the brief times out", func(t *testing.T) {
+		in := makeInput()
+		session := &researchSession{
+			hotelAvailable: true,
+			timedOut:       true,
+			executed:       2,
+			hotels: []domain.Hotel{
+				{ID: "h0", Name: "无价酒店"},
+				{ID: "h1", Name: "全季酒店", PricePerNightYuan: 400},
+				{ID: "h2", Name: "更便宜的酒店", PricePerNightYuan: 300},
+			},
+		}
+		brief := domain.ResearchBrief{}
+		if question := normalizeResearchBrief(&brief, in, session); question != nil {
+			t.Fatalf("unexpected question: %+v", question)
+		}
+		if brief.Accommodation.Selected == nil || brief.Accommodation.Selected.ID != "h1" {
+			t.Fatalf("selected = %+v", brief.Accommodation.Selected)
+		}
+		if brief.Accommodation.TotalYuan != 800 {
+			t.Fatalf("total = %d", brief.Accommodation.TotalYuan)
+		}
+	})
 }
 
 func TestResearchMatchGuides(t *testing.T) {
@@ -904,9 +928,10 @@ func TestRenderResearchPrompt(t *testing.T) {
 			Name: "search_travel_notes", Description: "查小红书攻略",
 			Schema: json.RawMessage(`{"type":"object"}`),
 		}},
-		Disabled: []DisabledPlugin{{Name: "search_hotels", Reason: "未配置 API Key"}},
-		Today:    "2026-11-20",
-		Nights:   2,
+		SkillLines: []string{"- research-playbook@1.0.0：用于研究闭馆日"},
+		Disabled:   []DisabledPlugin{{Name: "search_hotels", Reason: "未配置 API Key"}},
+		Today:      "2026-11-20",
+		Nights:     2,
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -916,7 +941,7 @@ func TestRenderResearchPrompt(t *testing.T) {
 			t.Fatalf("system missing %q", want)
 		}
 	}
-	for _, want := range []string{"北京三天", "2026-11-20", "2 晚", "search_travel_notes", "未配置 API Key", "poi-0"} {
+	for _, want := range []string{"北京三天", "2026-11-20", "2 晚", "search_travel_notes", "未配置 API Key", "poi-0", "- research-playbook@1.0.0：用于研究闭馆日"} {
 		if !strings.Contains(user, want) {
 			t.Fatalf("user missing %q", want)
 		}
@@ -1090,9 +1115,9 @@ func TestResearchToolBudget(t *testing.T) {
 	}}
 	llm := &fakeToolLLM{responses: []ToolCompletion{
 		{ToolCalls: []ToolCall{
-			toolCall("c1", researchGuideTool, `{}`),
-			toolCall("c2", researchGuideTool, `{}`),
-			toolCall("c3", researchGuideTool, `{}`),
+			toolCall("c1", researchGuideTool, `{"query":"c1"}`),
+			toolCall("c2", researchGuideTool, `{"query":"c2"}`),
+			toolCall("c3", researchGuideTool, `{"query":"c3"}`),
 		}},
 	}}
 	events := &eventRecorder{}

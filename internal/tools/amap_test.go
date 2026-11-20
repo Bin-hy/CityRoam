@@ -40,9 +40,27 @@ func TestAMap(t *testing.T) {
 		}
 	})
 
+	t.Run("search tolerates array fields", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, `{"status":"1","pois":[
+				{"id":"B00002","name":"无名茶馆","type":[],"address":[],"location":"116.4000,39.9000"}
+			]}`)
+		}))
+		defer server.Close()
+
+		client := NewAMapClient("test-key", WithAMapBaseURL(server.URL))
+		pois, err := client.SearchPOI(context.Background(), "茶馆", "beijing")
+		if err != nil {
+			t.Fatalf("search POI: %v", err)
+		}
+		if len(pois) != 1 || pois[0].Name != "无名茶馆" || pois[0].Address != "" {
+			t.Fatalf("pois = %+v", pois)
+		}
+	})
+
 	t.Run("geocode success", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			io.WriteString(w, `{"status":"1","geocodes":[{"formatted_address":"北京市东城区景山前街4号","province":"北京市","city":"北京市","district":"东城区","location":"116.3972,39.9163"}]}`)
+			io.WriteString(w, `{"status":"1","geocodes":[{"formatted_address":"北京市东城区景山前街4号","province":"北京市","city":"北京市","district":[],"location":"116.3972,39.9163"}]}`)
 		}))
 		defer server.Close()
 

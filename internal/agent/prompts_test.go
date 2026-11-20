@@ -68,6 +68,21 @@ func TestPromptSchemas(t *testing.T) {
 		}
 	})
 
+	t.Run("draft template carries the weather rule", func(t *testing.T) {
+		rendered, err := RenderPrompt("draft", DraftPromptData{
+			Constraints: json.RawMessage(`{"city":"beijing","days":1}`),
+			Candidates:  json.RawMessage(`[]`),
+			Research:    json.RawMessage(`{"status":"ok","weather":[{"date":"2026-12-01","day_weather":"小雨"}]}`),
+			Days:        1,
+		})
+		if err != nil {
+			t.Fatalf("render draft: %v", err)
+		}
+		if !strings.Contains(rendered, "降水日优先安排室内点位") || !strings.Contains(rendered, "不得猜测天气") {
+			t.Fatalf("draft prompt missing weather rule:\n%s", rendered)
+		}
+	})
+
 	t.Run("schemas compile and validate", func(t *testing.T) {
 		constraint := compileSchema(t, ConstraintSchema)
 		assertValid(t, constraint, `{"city":"beijing","days":2,"pace":"relaxed","meals":{"enabled":true},"missing":[]}`)

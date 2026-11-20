@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "skills": {
+    "beijing-research-playbook": {
+      "version": "1.0.1",
+      "sha256": "77daaa250e3bcfec068e4c0917d5b11caf33108cb041303ae96703f085e6eae9"
+    }
+  }
+}

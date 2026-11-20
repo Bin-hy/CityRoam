@@ -145,6 +145,47 @@ func (a runStoreAdapter) UpdateRunStatus(_ context.Context, runID, status, stage
 	return fmt.Errorf("run %s not found", runID)
 }
 
+func (a runStoreAdapter) UpdateRunMode(_ context.Context, runID, mode string) error {
+	a.store.mu.Lock()
+	defer a.store.mu.Unlock()
+	for tripID, runs := range a.store.runs {
+		for index := range runs {
+			if runs[index].ID != runID {
+				continue
+			}
+			runs[index].Mode = mode
+			a.store.runs[tripID] = runs
+			return nil
+		}
+	}
+	return fmt.Errorf("run %s not found", runID)
+}
+
+func (a runStoreAdapter) GetPlanVersion(_ context.Context, tripID string, seq int) (agent.VersionState, error) {
+	a.store.mu.Lock()
+	defer a.store.mu.Unlock()
+	for _, version := range a.store.versions[tripID] {
+		if int(version.Seq) != seq {
+			continue
+		}
+		var state agent.VersionState
+		state.Seq = seq
+		if err := json.Unmarshal(version.Plan, &state.Plan); err != nil {
+			return agent.VersionState{}, err
+		}
+		if err := json.Unmarshal(version.Constraints, &state.Constraints); err != nil {
+			return agent.VersionState{}, err
+		}
+		if len(version.Violations) > 0 {
+			if err := json.Unmarshal(version.Violations, &state.Violations); err != nil {
+				return agent.VersionState{}, err
+			}
+		}
+		return state, nil
+	}
+	return agent.VersionState{}, pgx.ErrNoRows
+}
+
 func (a runStoreAdapter) SaveVersion(_ context.Context, runID string, snapshot agent.VersionSnapshot, status string) error {
 	a.store.mu.Lock()
 	defer a.store.mu.Unlock()
@@ -380,7 +421,7 @@ func TestAPIIntegration(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("reject status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	waitRun(t, store, rejected.RunID, agent.StatusCancelled, "rejected")
+	waitRun(t, store, rejected.RunID, agent.StatusAwaitingUser, "proposal_rejected")
 
 	store.mu.Lock()
 	versionCount = len(store.versions[created.TripID])

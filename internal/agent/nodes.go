@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"trippilot/internal/domain"
+	"trippilot/internal/skills"
 )
 
 // EventPublisher is implemented by the events broker. Nodes publish domain
@@ -48,7 +49,9 @@ type Nodes struct {
 	routes         domain.RouteProvider
 
 	toolLLM              ToolLLM
+	hotelResolver        HotelResolver
 	researchTools        []ResearchTool
+	skillProvider        skills.Provider
 	researchDisabled     []DisabledPlugin
 	researchTimeout      time.Duration
 	researchMaxToolCalls int
@@ -67,6 +70,26 @@ func WithNodeClock(now func() time.Time) NodeOption {
 
 func WithToolLLM(client ToolLLM) NodeOption {
 	return func(n *Nodes) { n.toolLLM = client }
+}
+
+func WithHotelResolver(resolver HotelResolver) NodeOption {
+	return func(n *Nodes) { n.hotelResolver = resolver }
+}
+
+// WithSkillProvider sets the catalog and body source for new runs. A run pins
+// the catalog once, so later upgrades cannot change it.
+func WithSkillProvider(provider skills.Provider) NodeOption {
+	return func(n *Nodes) {
+		if provider != nil {
+			n.skillProvider = provider
+		}
+	}
+}
+
+// WithSkillRegistry keeps the immutable registry usable for tests and offline
+// evaluation; it is just a Provider with no refresh.
+func WithSkillRegistry(registry *skills.Registry) NodeOption {
+	return WithSkillProvider(registry)
 }
 
 func WithResearchTools(tools ...ResearchTool) NodeOption {
@@ -114,6 +137,7 @@ func NewNodes(llm LLMClient, events EventPublisher, opts ...NodeOption) *Nodes {
 		validator:            defaultValidator(),
 		researchTimeout:      12 * time.Second,
 		researchMaxToolCalls: 6,
+		skillProvider:        skills.NewRegistry(),
 	}
 	for _, opt := range opts {
 		opt(n)

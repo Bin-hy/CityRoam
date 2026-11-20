@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { Play, RefreshCw } from "lucide-react";
+import { loginURL } from "@/api/auth";
 import { ApiError } from "@/api/client";
 import { listEvalCases, listEvalRuns, startEval } from "@/api/eval";
 import type { EvalRun } from "@/api/types";
@@ -9,8 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useRunStream } from "@/hooks/useRunStream";
-import { RunTrace } from "@/features/trace/RunTrace";
+import { useAuth } from "@/features/auth/useAuth";
+import { useRunStream } from "@/features/eval/trace/useRunStream";
+import { RunTrace } from "@/features/eval/trace/RunTrace";
 import { aggregateMetrics, caseResults } from "./evalModel";
 
 const TOKEN_KEY = "trippilot.adminToken";
@@ -29,10 +32,16 @@ function resultBadge(run: EvalRun) {
 }
 
 export function EvalDashboard() {
+  const auth = useAuth();
   const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) ?? "");
   const [draft, setDraft] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
+
+  const sessionAdmin = auth.data?.enabled === true && auth.data.authenticated === true && auth.data.user?.role === "admin";
+  const needsAdminRole = auth.data?.enabled === true && auth.data.authenticated === true && !sessionAdmin;
+  const usingToken = !sessionAdmin;
+  const activeToken = usingToken ? token : "";
 
   useEffect(() => {
     if (!polling) return;
@@ -41,20 +50,20 @@ export function EvalDashboard() {
   }, [polling]);
 
   const casesQuery = useQuery({
-    queryKey: ["eval", "cases", token],
-    queryFn: () => listEvalCases(token),
-    enabled: Boolean(token),
+    queryKey: ["eval", "cases", activeToken],
+    queryFn: () => listEvalCases(activeToken),
+    enabled: !auth.isPending && !needsAdminRole && (sessionAdmin || Boolean(token)),
     retry: false,
   });
   const runsQuery = useQuery({
-    queryKey: ["eval", "runs", token],
-    queryFn: () => listEvalRuns(token),
-    enabled: Boolean(token),
+    queryKey: ["eval", "runs", activeToken],
+    queryFn: () => listEvalRuns(activeToken),
+    enabled: !auth.isPending && !needsAdminRole && (sessionAdmin || Boolean(token)),
     retry: false,
     refetchInterval: polling ? 5_000 : false,
   });
   const start = useMutation({
-    mutationFn: () => startEval(token),
+    mutationFn: () => startEval(activeToken),
     onSuccess: () => setPolling(true),
   });
 
@@ -74,12 +83,41 @@ export function EvalDashboard() {
     setExpanded(null);
   }
 
-  if (!token) {
+  if (auth.isPending) {
+    return (
+      <main className="mx-auto max-w-md px-4 py-16">
+        <Card>
+          <CardContent className="pt-6 text-sm text-muted-foreground">正在确认登录状态…</CardContent>
+        </Card>
+      </main>
+    );
+  }
+
+  if (needsAdminRole) {
     return (
       <main className="mx-auto max-w-md px-4 py-16">
         <Card>
           <CardHeader>
-            <CardTitle>评估面板</CardTitle>
+            <CardTitle className="font-serif tracking-tight">评估面板</CardTitle>
+            <CardDescription>评估面板仅对管理员开放。</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-muted-foreground">
+            <p>当前账号没有管理员角色。请联系管理员将其加入白名单，或使用管理员令牌访问。</p>
+            <Button size="sm" variant="outline" asChild>
+              <Link to="/">返回首页</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
+
+  if (usingToken && !token) {
+    return (
+      <main className="mx-auto max-w-md px-4 py-16">
+        <Card>
+          <CardHeader>
+            <CardTitle className="font-serif tracking-tight">评估面板</CardTitle>
             <CardDescription>请输入管理员令牌以查看评测用例与结果。</CardDescription>
           </CardHeader>
           <CardContent>
@@ -89,7 +127,7 @@ export function EvalDashboard() {
                 <input
                   type="password"
                   aria-label="管理员令牌"
-                  className="h-9 rounded-md border bg-background px-2 text-sm"
+                  className="h-9 rounded-md border border-hairline bg-paper px-2 text-sm"
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   autoComplete="off"
@@ -118,7 +156,7 @@ export function EvalDashboard() {
     <main className="mx-auto max-w-6xl space-y-4 px-4 py-8">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold">评估面板</h1>
+          <h1 className="font-serif text-lg tracking-tight text-ink">评估面板</h1>
           <p className="text-sm text-muted-foreground">
             {cases.length} 条用例 · {runs.length} 次运行
           </p>
@@ -132,9 +170,11 @@ export function EvalDashboard() {
             <Play className="mr-1 h-4 w-4" />
             {start.isPending ? "启动中…" : "启动评测"}
           </Button>
-          <Button size="sm" variant="ghost" onClick={resetToken}>
-            退出
-          </Button>
+          {usingToken && (
+            <Button size="sm" variant="ghost" onClick={resetToken}>
+              退出
+            </Button>
+          )}
         </div>
       </header>
 
@@ -148,10 +188,16 @@ export function EvalDashboard() {
       )}
       {unauthorized && (
         <Alert variant="destructive" className="flex flex-wrap items-center justify-between gap-2 text-sm">
-          <span>管理员令牌无效。</span>
-          <Button size="sm" variant="outline" onClick={resetToken}>
-            重新输入
-          </Button>
+          <span>{sessionAdmin ? "会话已过期，请重新登录。" : "管理员令牌无效。"}</span>
+          {sessionAdmin ? (
+            <Button size="sm" variant="outline" asChild>
+              <a href={loginURL("/eval")}>重新登录</a>
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" onClick={resetToken}>
+              重新输入
+            </Button>
+          )}
         </Alert>
       )}
       {unavailable && !unauthorized && (
@@ -165,7 +211,7 @@ export function EvalDashboard() {
 
       <Card>
         <CardHeader>
-          <CardTitle>指标汇总</CardTitle>
+          <CardTitle className="font-serif tracking-tight">指标汇总</CardTitle>
           <CardDescription>基于全部已记录运行的平均值，缺失指标显示为「—」。</CardDescription>
         </CardHeader>
         <CardContent>
@@ -194,7 +240,7 @@ export function EvalDashboard() {
 
       <Card>
         <CardHeader>
-          <CardTitle>用例与最近结果</CardTitle>
+          <CardTitle className="font-serif tracking-tight">用例与最近结果</CardTitle>
           <CardDescription>失败用例可展开 Agent trace，定位约束、修复与工具调用。</CardDescription>
         </CardHeader>
         <CardContent>
@@ -253,7 +299,7 @@ export function EvalDashboard() {
                       </tr>
                       {latest?.run_id && expanded === latest.run_id && (
                         <tr className="border-b last:border-0">
-                          <td colSpan={6} className="bg-muted/40 p-3">
+                          <td colSpan={6} className="bg-sand/40 p-3">
                             <EvalRunTrace runID={latest.run_id} />
                           </td>
                         </tr>

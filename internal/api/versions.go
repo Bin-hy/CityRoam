@@ -128,7 +128,7 @@ func handleCreateAdjustment(deps Deps) http.HandlerFunc {
 			Input:       input,
 			Constraints: constraints,
 			Plan:        plan,
-			Draft:       draftFromPlan(plan),
+			Draft:       domain.DraftFromPlan(plan),
 			Violations:  violations,
 			Previous:    &previous,
 			PreviousSeq: int(base.Seq),
@@ -168,27 +168,6 @@ func handleCreateAdjustment(deps Deps) http.HandlerFunc {
 			EventsURL: eventsURL(run.ID),
 		})
 	}
-}
-
-// draftFromPlan rebuilds a draft so the adjustment scheduler can re-merge a
-// patched day and compare untouched days against the stored version.
-func draftFromPlan(plan domain.Itinerary) domain.DraftPlan {
-	draft := domain.DraftPlan{Days: make([]domain.DraftDay, 0, len(plan.Days))}
-	for _, day := range plan.Days {
-		items := make([]domain.DraftItem, 0, len(day.Blocks))
-		for _, block := range day.Blocks {
-			if block.Type == domain.BlockTypeTransit || block.POIID == "" {
-				continue
-			}
-			items = append(items, domain.DraftItem{
-				POIID:       block.POIID,
-				Type:        block.Type,
-				DurationMin: block.DurationMin,
-			})
-		}
-		draft.Days = append(draft.Days, domain.DraftDay{Date: day.Date, Items: items})
-	}
-	return draft
 }
 
 func handleListVersions(deps Deps) http.HandlerFunc {

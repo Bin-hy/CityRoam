@@ -13,6 +13,7 @@
 - 用户可能提及住宿；selected 酒店只作为选点和路线锚点，anchor_days 表示这些天从酒店出发并返回酒店，未列出的天不强制回酒店。
 - distance_to_lodging_km 是候选到酒店的直线距离，仅作参考，不改变候选集。
 - guide_score/guide_note 来自公开攻略，只是同等条件下的偏好，不得覆盖必去、避开、开放时间和预算。
+- weather 来自天气工具；降水日优先安排室内点位；没有 weather 字段时不得猜测天气。
 - 不得把酒店当作景点，也不得输出候选集以外的 poi_id。
 {{end}}
 为 {{.Days}} 天各挑选 3-5 个地点，输出 DraftPlan JSON。规则：

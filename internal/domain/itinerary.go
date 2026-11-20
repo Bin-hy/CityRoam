@@ -105,14 +105,27 @@ type Block struct {
 	Notes       string     `json:"notes,omitempty"`
 }
 
+type TransitLeg struct {
+	Mode        string       `json:"mode"`
+	LineName    string       `json:"line_name,omitempty"`
+	FromStop    string       `json:"from_stop,omitempty"`
+	ToStop      string       `json:"to_stop,omitempty"`
+	DistanceM   int          `json:"distance_m"`
+	DurationMin int          `json:"duration_min"`
+	CostYuan    int          `json:"cost_yuan"`
+	Polyline    [][2]float64 `json:"polyline,omitempty"`
+	Estimated   bool         `json:"estimated,omitempty"`
+}
+
 type Transport struct {
-	Mode        string `json:"mode"`
-	FromPOIID   string `json:"from_poi_id"`
-	ToPOIID     string `json:"to_poi_id"`
-	DistanceM   int    `json:"distance_m"`
-	DurationMin int    `json:"duration_min"`
-	CostYuan    int    `json:"cost_yuan"`
-	Estimated   bool   `json:"estimated"`
+	Mode        string       `json:"mode"`
+	FromPOIID   string       `json:"from_poi_id"`
+	ToPOIID     string       `json:"to_poi_id"`
+	DistanceM   int          `json:"distance_m"`
+	DurationMin int          `json:"duration_min"`
+	CostYuan    int          `json:"cost_yuan"`
+	Estimated   bool         `json:"estimated"`
+	Legs        []TransitLeg `json:"legs,omitempty"`
 }
 
 type Totals struct {
@@ -146,6 +159,12 @@ func (i Itinerary) Clone() Itinerary {
 		for blockIndex := range out.Days[dayIndex].Blocks {
 			if source := i.Days[dayIndex].Blocks[blockIndex].Transport; source != nil {
 				transport := *source
+				if len(source.Legs) > 0 {
+					transport.Legs = append([]TransitLeg(nil), source.Legs...)
+					for legIndex := range transport.Legs {
+						transport.Legs[legIndex].Polyline = append([][2]float64(nil), source.Legs[legIndex].Polyline...)
+					}
+				}
 				out.Days[dayIndex].Blocks[blockIndex].Transport = &transport
 			}
 		}

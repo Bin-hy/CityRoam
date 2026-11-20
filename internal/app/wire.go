@@ -14,6 +14,7 @@ import (
 	"trippilot/internal/config"
 	"trippilot/internal/plugins"
 	"trippilot/internal/repo"
+	"trippilot/internal/tools"
 )
 
 const defaultHealthTimeout = time.Second
@@ -69,13 +70,16 @@ func WirePlugins(ctx context.Context, cfg config.Config, store Store, events plu
 		plugins.WithGovernorMaxCalls(cfg.ResearchMaxToolCalls),
 		plugins.WithGovernorToolTimeout("search_hotels", cfg.HotelSearchTimeout),
 		plugins.WithGovernorToolTimeout("search_travel_notes", cfg.GuideSearchTimeout),
+		plugins.WithGovernorToolTimeout("get_weather", cfg.WeatherToolTimeout),
+		plugins.WithGovernorToolLimit("get_weather", cfg.WeatherMaxCallsPerRun),
 		plugins.WithGovernorLogger(logger),
 	)
 
 	hotel, _ := wireHotel(ctx, cfg, options.probe)
 	guide, _ := wireGuide(cfg)
-	wiring.Registry = plugins.NewRegistry(hotel, guide)
-	for _, plugin := range []plugins.Plugin{hotel, guide} {
+	weather, _ := wireWeather(cfg)
+	wiring.Registry = plugins.NewRegistry(hotel, guide, weather)
+	for _, plugin := range []plugins.Plugin{hotel, guide, weather} {
 		status := plugin.Status()
 		wiring.Statuses = append(wiring.Statuses, status)
 		if status.Enabled {
@@ -92,7 +96,7 @@ func WirePlugins(ctx context.Context, cfg config.Config, store Store, events plu
 
 func wireHotel(ctx context.Context, cfg config.Config, probe func(context.Context, string) bool) (plugins.Plugin, plugins.Status) {
 	const name = "search_hotels"
-	status := plugins.Status{Name: name}
+	status := plugins.Status{Name: "hotel"}
 	if !cfg.HotelPluginEnabled {
 		status.DisabledReason = "HOTEL_PLUGIN_ENABLED is false"
 		return staticPlugin{name: name, status: status}, status
@@ -119,7 +123,7 @@ func wireHotel(ctx context.Context, cfg config.Config, probe func(context.Contex
 
 func wireGuide(cfg config.Config) (plugins.Plugin, plugins.Status) {
 	const name = "search_travel_notes"
-	status := plugins.Status{Name: name}
+	status := plugins.Status{Name: "guide"}
 	if !cfg.GuidePluginEnabled {
 		status.DisabledReason = "GUIDE_PLUGIN_ENABLED is false"
 		return staticPlugin{name: name, status: status}, status
@@ -134,6 +138,27 @@ func wireGuide(cfg config.Config) (plugins.Plugin, plugins.Status) {
 	)
 	if err != nil {
 		status.DisabledReason = "guide search configuration is invalid"
+		return staticPlugin{name: name, status: status}, status
+	}
+	status.Enabled = true
+	return staticPlugin{name: name, status: status, tools: []agent.ResearchTool{tool}}, status
+}
+
+func wireWeather(cfg config.Config) (plugins.Plugin, plugins.Status) {
+	const name = "get_weather"
+	status := plugins.Status{Name: "weather"}
+	if strings.TrimSpace(cfg.AMapWebKey) == "" {
+		status.DisabledReason = "AMAP_WEB_KEY is empty"
+		return staticPlugin{name: name, status: status}, status
+	}
+	options := make([]tools.AMapOption, 0, 1)
+	if cfg.WeatherToolTimeout > 0 {
+		options = append(options, tools.WithAMapHTTPClient(&http.Client{Timeout: cfg.WeatherToolTimeout}))
+	}
+	provider := tools.NewAMapClient(cfg.AMapWebKey, options...)
+	tool, err := plugins.NewWeatherTool(provider, plugins.WithWeatherCacheTTL(cfg.WeatherCacheTTL))
+	if err != nil {
+		status.DisabledReason = "weather tool configuration is invalid"
 		return staticPlugin{name: name, status: status}, status
 	}
 	status.Enabled = true

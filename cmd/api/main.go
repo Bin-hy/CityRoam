@@ -17,6 +17,7 @@ import (
 	"trippilot/internal/agent"
 	"trippilot/internal/api"
 	"trippilot/internal/app"
+	"trippilot/internal/auth"
 	"trippilot/internal/config"
 	"trippilot/internal/eval"
 	"trippilot/internal/events"
@@ -24,6 +25,7 @@ import (
 	"trippilot/internal/plugins"
 	"trippilot/internal/repo"
 	"trippilot/internal/runstore"
+	"trippilot/internal/skills"
 	"trippilot/internal/tools"
 	"trippilot/migrations"
 )
@@ -46,6 +48,21 @@ func run() error {
 	}
 	logger := logging.New(cfg.LogLevel)
 	logger.Info("trippilot api starting", "version", version, "port", cfg.Port)
+
+	skillService, err := skills.Open(cfg.SkillsDir)
+	if err != nil {
+		return fmt.Errorf("load skills: %w", err)
+	}
+	stats := skillService.Stats()
+	if skillService.Len() > 0 {
+		logger.Info("skills loaded", "count", skillService.Len(), "dir", cfg.SkillsDir,
+			"cache_entries", stats.Entries, "cache_bytes", stats.Bytes)
+		for _, entry := range skillService.Catalog() {
+			logger.Info("skill pinned", "name", entry.Name, "version", entry.Version, "sha256", entry.SHA256)
+		}
+	} else {
+		logger.Info("skills disabled", "dir", cfg.SkillsDir)
+	}
 
 	if cfg.LLMBaseURL == "" || cfg.LLMModel == "" {
 		return errors.New("LLM_BASE_URL and LLM_MODEL are required")
@@ -91,12 +108,16 @@ func run() error {
 	nodeOptions := []agent.NodeOption{
 		agent.WithSnapshotSource(snapshot),
 		agent.WithPOILookup(snapshot),
-		agent.WithRouteProvider(tools.NewRouteService(amap, "beijing")),
+		agent.WithRouteProvider(tools.NewRouteService(amap, "北京")),
 		agent.WithNodeLogger(logger),
 	}
 	if amap != nil {
-		nodeOptions = append(nodeOptions, agent.WithExternalSource(tools.NewAMapSource(amap)))
+		nodeOptions = append(nodeOptions,
+			agent.WithExternalSource(tools.NewAMapSource(amap)),
+			agent.WithHotelResolver(tools.NewHotelGeocoder(amap)),
+		)
 	}
+	nodeOptions = append(nodeOptions, agent.WithSkillProvider(skillService))
 
 	broker, err := events.NewBroker(events.NewRepoStore(store), events.WithLogger(logger))
 	if err != nil {
@@ -131,6 +152,31 @@ func run() error {
 	}
 	cancelRecover()
 
+	runCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	authService, err := auth.New(startupCtx, auth.Config{
+		Enabled:               cfg.AuthEnabled,
+		CookieSecure:          cfg.AuthCookieSecure,
+		Issuer:                cfg.OIDCIssuer,
+		ClientID:              cfg.OIDCClientID,
+		ClientSecret:          cfg.OIDCClientSecret,
+		RedirectURI:           cfg.OIDCRedirectURI,
+		Scopes:                cfg.OIDCScopes,
+		Audience:              cfg.OIDCAudience,
+		ProviderName:          cfg.OIDCProviderName,
+		PostLogoutRedirectURI: cfg.OIDCPostLogoutRedirectURI,
+		WebBaseURL:            cfg.AuthWebBaseURL,
+		SessionTTL:            cfg.AuthSessionTTL,
+		AdminEmails:           cfg.AdminEmails,
+		AdminSubs:             cfg.AdminSubs,
+	}, store, logger)
+	if err != nil {
+		return err
+	}
+	authService.StartCleanup(runCtx, 0)
+	logger.Info("auth configured", "enabled", cfg.AuthEnabled, "issuer", cfg.OIDCIssuer)
+
 	router := api.NewRouter(api.Deps{
 		Version:          version,
 		Logger:           logger,
@@ -142,6 +188,9 @@ func run() error {
 		Runner:           runner,
 		Eval:             newEvalService(store, runner, logger),
 		PluginStatuses:   wiring.Statuses,
+		SkillCatalog:     skillService.Catalog,
+		Auth:             authService,
+		AllowedOrigins:   cfg.CORSAllowedOrigins,
 	})
 
 	server := &http.Server{
@@ -150,9 +199,6 @@ func run() error {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -165,7 +211,7 @@ func run() error {
 	select {
 	case err := <-errCh:
 		return fmt.Errorf("http server: %w", err)
-	case <-ctx.Done():
+	case <-runCtx.Done():
 	}
 
 	logger.Info("shutting down")

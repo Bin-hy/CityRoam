@@ -11,6 +11,7 @@ import (
 	"trippilot/internal/domain"
 	"trippilot/internal/domain/scheduler"
 	"trippilot/internal/domain/validator"
+	"trippilot/internal/skills"
 )
 
 func graphPlan() domain.Itinerary {
@@ -292,7 +293,7 @@ func TestGraphPlugins(t *testing.T) {
 			t.Fatalf("plan lodging = nil: %+v", out.Plan)
 		}
 		lodging := out.Plan.Lodging
-		if lodging.Nights != 1 || lodging.TotalYuan != 500 || len(lodging.AnchorDays) != 1 || lodging.AnchorDays[0] != 0 {
+		if lodging.Nights != 1 || lodging.TotalYuan != 500 || len(lodging.AnchorDays) != 2 || lodging.AnchorDays[0] != 0 || lodging.AnchorDays[1] != 1 {
 			t.Fatalf("lodging = %+v", lodging)
 		}
 		if out.Plan.Totals.LodgingYuan != 500 {
@@ -321,6 +322,69 @@ func TestGraphPlugins(t *testing.T) {
 		}
 		if !containsString(events.types(), "research.completed") {
 			t.Fatalf("events = %v", events.types())
+		}
+	})
+
+	t.Run("rainy forecast triggers bounded repair", func(t *testing.T) {
+		llm := &fakeLLM{replies: []json.RawMessage{
+			json.RawMessage(`{"city":"北京","days":1}`),
+			graphDraftReply(),
+			graphRepairReply("poi-0"),
+			graphRepairReply("poi-0"),
+		}}
+		weatherTool := &fakeResearchTool{name: researchWeatherTool, fn: func(context.Context, json.RawMessage) (json.RawMessage, error) {
+			return weatherToolOutput(t, domain.WeatherDay{Date: "2026-11-20", DayWeather: "小雨"}), nil
+		}}
+		toolLLM := &fakeToolLLM{responses: []ToolCompletion{
+			{ToolCalls: []ToolCall{toolCall("w1", researchWeatherTool, `{"city":"北京","start_date":"2026-11-20","days":1}`)}},
+			{Content: briefJSON(t, `{"status":"ok"}`)},
+		}}
+		source := &fakeSource{fn: func(context.Context, domain.POIQuery) ([]domain.POI, error) {
+			return []domain.POI{{ID: "poi-0", City: "beijing", Name: "长城", Outdoor: true}}, nil
+		}}
+		events := &eventRecorder{}
+		nodes := NewNodes(llm, events,
+			WithSnapshotSource(source),
+			WithScheduler(&fakeScheduler{plan: graphPlan()}),
+			WithValidator(validatorFunc(validator.Validate)),
+			WithToolLLM(toolLLM),
+			WithResearchTools(weatherTool),
+			WithResearchLimits(5*time.Second, 4),
+			WithNodeClock(func() time.Time { return time.Date(2026, 11, 19, 10, 0, 0, 0, time.Local) }),
+			WithNodeLogger(discardLogger()),
+		)
+		graph, err := NewGraph(context.Background(), nodes)
+		if err != nil {
+			t.Fatalf("new graph: %v", err)
+		}
+		out, err := graph.Run(context.Background(), &TripState{RunID: "run-weather", Input: "北京一天"})
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if out.Research == nil || out.Research.Status != domain.ResearchOK || len(out.Research.Weather) != 1 {
+			t.Fatalf("research = %+v", out.Research)
+		}
+		status, days := completedWeather(t, events)
+		if status != "ok" || days != 1 {
+			t.Fatalf("weather event = %s/%d", status, days)
+		}
+		if weatherTool.callCount() != 1 {
+			t.Fatalf("weather tool calls = %d", weatherTool.callCount())
+		}
+		if countString(events.types(), "repair.started") != 2 {
+			t.Fatalf("events = %v", events.types())
+		}
+		if out.StopReason != string(StopNoImprovement) || out.Plan.Totals.POICount != 1 {
+			t.Fatalf("stop=%s plan=%+v", out.StopReason, out.Plan)
+		}
+		var sawRain bool
+		for _, violation := range out.Snapshot.Violations {
+			if violation.Code == "C13" {
+				sawRain = true
+			}
+		}
+		if !sawRain {
+			t.Fatalf("violations = %+v", out.Snapshot.Violations)
 		}
 	})
 
@@ -408,6 +472,8 @@ func TestTripStateRoundTrip(t *testing.T) {
 			Message: "未找到指定酒店",
 			Options: []domain.ResearchOption{{ID: "continue_without_lodging", Label: "不带住宿继续"}},
 		},
+		SkillPins:       []skills.CatalogEntry{{Name: "research-playbook", Version: "1.0.0", Description: "用于研究", SHA256: strings.Repeat("a", 64)}},
+		SkillsPinned:    true,
 		ResolvedHotel:   &domain.Hotel{ID: "h1", Name: "测试酒店"},
 		ConstraintPatch: &domain.ConstraintSet{City: "beijing", Days: 1},
 		Status:          StatusAwaitingUser,
@@ -444,4 +510,72 @@ func countString(values []string, want string) int {
 		}
 	}
 	return count
+}
+
+func TestGraphPinsSkillCatalogWithoutBodies(t *testing.T) {
+	const bodyMarker = "BODY-MARKER-"
+	registrySkills := make([]skills.Skill, 0, 10)
+	for index := 0; index < 10; index++ {
+		registrySkills = append(registrySkills, skills.Skill{
+			Name:        "skill-" + string(rune('a'+index)),
+			Version:     "1.0.0",
+			Description: "用于测试状态体积",
+			SHA256:      strings.Repeat("a", 64),
+			Body:        bodyMarker + strings.Repeat("x", 10<<10),
+		})
+	}
+	registry := skills.NewRegistry(registrySkills...)
+	nodes := NewNodes(nil, &eventRecorder{}, WithSkillRegistry(registry), WithNodeLogger(discardLogger()))
+	graph := &Graph{nodes: nodes}
+
+	out, err := graph.admit(context.Background(), &TripState{RunID: "run-1", Input: "北京一天"})
+	if err != nil {
+		t.Fatalf("admit: %v", err)
+	}
+	encoded, err := out.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if strings.Contains(string(encoded), bodyMarker) {
+		t.Fatal("run state contains skill bodies")
+	}
+	if !strings.Contains(string(encoded), `"skill_pins"`) {
+		t.Fatalf("run state missing skill_pins: %s", encoded)
+	}
+	if len(encoded) >= 64<<10 {
+		t.Fatalf("run state is %d bytes, expected far below the 100 KiB of bodies", len(encoded))
+	}
+	if len(out.SkillPins) != len(registrySkills) {
+		t.Fatalf("pins = %d", len(out.SkillPins))
+	}
+}
+
+func TestGraphResearchLoadsLegacySkillBodies(t *testing.T) {
+	tool := &fakeResearchTool{name: researchGuideTool, fn: func(context.Context, json.RawMessage) (json.RawMessage, error) {
+		return guideToolOutput(t), nil
+	}}
+	llm := &fakeToolLLM{responses: []ToolCompletion{
+		{ToolCalls: []ToolCall{toolCall("c1", researchSkillTool, `{"name":"research-playbook"}`)}},
+		{Content: briefJSON(t, `{"status":"ok"}`)},
+	}}
+	nodes := NewNodes(nil, &eventRecorder{}, WithToolLLM(llm), WithResearchTools(tool), WithNodeLogger(discardLogger()))
+	graph := &Graph{nodes: nodes}
+	state := &TripState{
+		RunID:        "run-legacy",
+		Input:        "北京两天",
+		SkillsPinned: true,
+		Skills:       []skills.Skill{{Name: "research-playbook", Version: "1.0.0", Description: "用于研究", SHA256: strings.Repeat("a", 64), Body: "LEGACY BODY"}},
+		Constraints:  domain.ConstraintSet{City: "beijing", Days: 2},
+	}
+
+	out, err := graph.research(context.Background(), state)
+	if err != nil {
+		t.Fatalf("research: %v", err)
+	}
+	if out.Research == nil || out.Research.Status != domain.ResearchOK {
+		t.Fatalf("research = %+v", out.Research)
+	}
+	if !strings.Contains(llm.requestAt(t, 1).Messages[2].Content, "LEGACY BODY") {
+		t.Fatalf("legacy body not loaded: %s", llm.requestAt(t, 1).Messages[2].Content)
+	}
 }

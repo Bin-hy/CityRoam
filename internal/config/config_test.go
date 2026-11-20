@@ -12,10 +12,26 @@ func clearPluginEnv(t *testing.T) {
 	for _, key := range []string{
 		"HOTEL_PLUGIN_ENABLED", "HOTEL_TOOL_URL", "HOTEL_TOOL_TOKEN", "HOTEL_SEARCH_TIMEOUT", "HOTEL_CACHE_TTL",
 		"GUIDE_PLUGIN_ENABLED", "GUIDE_SEARCH_BASE_URL", "GUIDE_SEARCH_API_KEY", "GUIDE_SEARCH_TIMEOUT", "GUIDE_CACHE_TTL",
-		"RESEARCH_TIMEOUT", "RESEARCH_MAX_TOOL_CALLS",
+		"WEATHER_CACHE_TTL", "WEATHER_TOOL_TIMEOUT", "WEATHER_MAX_CALLS_PER_RUN",
+		"RESEARCH_TIMEOUT", "RESEARCH_MAX_TOOL_CALLS", "SKILLS_DIR",
 	} {
 		t.Setenv(key, "")
 	}
+	t.Setenv("AUTH_ENABLED", "")
+	t.Setenv("AUTH_SESSION_TTL", "")
+	t.Setenv("AUTH_COOKIE_SECURE", "")
+	t.Setenv("AUTH_WEB_BASE_URL", "")
+	t.Setenv("OIDC_ISSUER", "")
+	t.Setenv("OIDC_CLIENT_ID", "")
+	t.Setenv("OIDC_CLIENT_SECRET", "")
+	t.Setenv("OIDC_REDIRECT_URI", "")
+	t.Setenv("OIDC_SCOPES", "")
+	t.Setenv("OIDC_AUDIENCE", "")
+	t.Setenv("OIDC_PROVIDER_NAME", "")
+	t.Setenv("OIDC_POST_LOGOUT_REDIRECT_URI", "")
+	t.Setenv("ADMIN_EMAILS", "")
+	t.Setenv("ADMIN_SUBS", "")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "")
 }
 
 func TestLoad(t *testing.T) {
@@ -112,6 +128,12 @@ func TestLoadPluginDefaults(t *testing.T) {
 	if cfg.ResearchTimeout != 12*time.Second || cfg.ResearchMaxToolCalls != 6 {
 		t.Fatalf("unexpected research limits: %+v", cfg)
 	}
+	if cfg.WeatherCacheTTL != 30*time.Minute || cfg.WeatherToolTimeout != 3*time.Second || cfg.WeatherMaxCallsPerRun != 1 {
+		t.Fatalf("unexpected weather limits: %+v", cfg)
+	}
+	if cfg.SkillsDir != "skills" {
+		t.Fatalf("SkillsDir = %q", cfg.SkillsDir)
+	}
 }
 
 func TestLoadPluginExplicitValues(t *testing.T) {
@@ -123,6 +145,9 @@ func TestLoadPluginExplicitValues(t *testing.T) {
 	t.Setenv("HOTEL_CACHE_TTL", "45m")
 	t.Setenv("RESEARCH_TIMEOUT", "8s")
 	t.Setenv("RESEARCH_MAX_TOOL_CALLS", "3")
+	t.Setenv("WEATHER_CACHE_TTL", "15m")
+	t.Setenv("WEATHER_TOOL_TIMEOUT", "2s")
+	t.Setenv("WEATHER_MAX_CALLS_PER_RUN", "2")
 
 	cfg, err := Load()
 	if err != nil {
@@ -137,6 +162,9 @@ func TestLoadPluginExplicitValues(t *testing.T) {
 	if cfg.ResearchTimeout != 8*time.Second || cfg.ResearchMaxToolCalls != 3 {
 		t.Fatalf("research overrides = %+v", cfg)
 	}
+	if cfg.WeatherCacheTTL != 15*time.Minute || cfg.WeatherToolTimeout != 2*time.Second || cfg.WeatherMaxCallsPerRun != 2 {
+		t.Fatalf("weather overrides = %+v", cfg)
+	}
 }
 
 func TestLoadRejectsInvalidPluginConfig(t *testing.T) {
@@ -150,6 +178,9 @@ func TestLoadRejectsInvalidPluginConfig(t *testing.T) {
 		{key: "HOTEL_SEARCH_TIMEOUT", value: "abc", want: "HOTEL_SEARCH_TIMEOUT"},
 		{key: "GUIDE_CACHE_TTL", value: "-1s", want: "GUIDE_CACHE_TTL"},
 		{key: "RESEARCH_MAX_TOOL_CALLS", value: "0", want: "RESEARCH_MAX_TOOL_CALLS"},
+		{key: "WEATHER_CACHE_TTL", value: "0s", want: "WEATHER_CACHE_TTL"},
+		{key: "WEATHER_TOOL_TIMEOUT", value: "soon", want: "WEATHER_TOOL_TIMEOUT"},
+		{key: "WEATHER_MAX_CALLS_PER_RUN", value: "11", want: "WEATHER_MAX_CALLS_PER_RUN"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
@@ -176,5 +207,111 @@ func TestLoadAllowsEmptyGuideKey(t *testing.T) {
 	}
 	if !cfg.GuidePluginEnabled || cfg.GuideSearchAPIKey != "" {
 		t.Fatalf("guide config = %+v", cfg)
+	}
+}
+
+func TestLoadAuthDisabledAllowsEmptyOIDC(t *testing.T) {
+	clearPluginEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://localhost/trippilot")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AuthEnabled {
+		t.Fatal("AuthEnabled = true, want false")
+	}
+	if cfg.OIDCScopes[len(cfg.OIDCScopes)-1] != "email" || cfg.AuthSessionTTL != 168*time.Hour {
+		t.Fatalf("unexpected auth defaults: %+v", cfg)
+	}
+	if cfg.AuthCookieSecure != "auto" || cfg.OIDCProviderName != "统一登录" {
+		t.Fatalf("unexpected auth defaults: %+v", cfg)
+	}
+}
+
+func TestLoadAuthEnabledRequiresOIDCFields(t *testing.T) {
+	base := map[string]string{
+		"OIDC_ISSUER":        "http://127.0.0.1:9410",
+		"OIDC_CLIENT_ID":     "trippilot",
+		"OIDC_CLIENT_SECRET": "secret",
+		"OIDC_REDIRECT_URI":  "http://127.0.0.1:8080/api/auth/callback",
+	}
+	for _, key := range []string{"OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "OIDC_REDIRECT_URI"} {
+		t.Run(key, func(t *testing.T) {
+			clearPluginEnv(t)
+			t.Setenv("DATABASE_URL", "postgres://localhost/trippilot")
+			t.Setenv("AUTH_ENABLED", "true")
+			for name, value := range base {
+				t.Setenv(name, value)
+			}
+			t.Setenv(key, "")
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("Load() error = %v, want mention of %s", err, key)
+			}
+		})
+	}
+}
+
+func TestLoadAuthParsesListsAndOverrides(t *testing.T) {
+	clearPluginEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://localhost/trippilot")
+	t.Setenv("AUTH_ENABLED", "true")
+	t.Setenv("OIDC_ISSUER", "http://127.0.0.1:9410")
+	t.Setenv("OIDC_CLIENT_ID", "trippilot")
+	t.Setenv("OIDC_CLIENT_SECRET", "secret")
+	t.Setenv("OIDC_REDIRECT_URI", "http://127.0.0.1:8080/api/auth/callback")
+	t.Setenv("OIDC_SCOPES", "openid  email")
+	t.Setenv("AUTH_SESSION_TTL", "24h")
+	t.Setenv("AUTH_COOKIE_SECURE", "false")
+	t.Setenv("ADMIN_EMAILS", " a@example.com , ,B@Example.com")
+	t.Setenv("ADMIN_SUBS", "sub-1, sub-2")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com,http://localhost:5173")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.OIDCScopes) != 2 || cfg.OIDCScopes[1] != "email" {
+		t.Fatalf("OIDCScopes = %v", cfg.OIDCScopes)
+	}
+	if cfg.AuthSessionTTL != 24*time.Hour || cfg.AuthCookieSecure != "false" {
+		t.Fatalf("auth overrides = %+v", cfg)
+	}
+	if len(cfg.AdminEmails) != 2 || cfg.AdminEmails[1] != "B@Example.com" {
+		t.Fatalf("AdminEmails = %v", cfg.AdminEmails)
+	}
+	if len(cfg.AdminSubs) != 2 || len(cfg.CORSAllowedOrigins) != 2 {
+		t.Fatalf("lists = %+v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidAuthConfig(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+		want  string
+	}{
+		{name: "cookie secure", key: "AUTH_COOKIE_SECURE", value: "sometimes", want: "AUTH_COOKIE_SECURE"},
+		{name: "cors wildcard", key: "CORS_ALLOWED_ORIGINS", value: "https://app.example.com,*", want: "CORS_ALLOWED_ORIGINS"},
+		{name: "web base url", key: "AUTH_WEB_BASE_URL", value: "not-a-url", want: "AUTH_WEB_BASE_URL"},
+		{name: "issuer url", key: "OIDC_ISSUER", value: "ftp://issuer", want: "OIDC_ISSUER"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearPluginEnv(t)
+			t.Setenv("DATABASE_URL", "postgres://localhost/trippilot")
+			t.Setenv("AUTH_ENABLED", "true")
+			t.Setenv("OIDC_ISSUER", "http://127.0.0.1:9410")
+			t.Setenv("OIDC_CLIENT_ID", "trippilot")
+			t.Setenv("OIDC_CLIENT_SECRET", "secret")
+			t.Setenv("OIDC_REDIRECT_URI", "http://127.0.0.1:8080/api/auth/callback")
+			t.Setenv(tt.key, tt.value)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() error = %v, want mention of %s", err, tt.want)
+			}
+		})
 	}
 }

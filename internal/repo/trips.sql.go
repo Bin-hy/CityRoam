@@ -8,12 +8,13 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 const createTrip = `-- name: CreateTrip :one
-INSERT INTO trips (city, days, budget_yuan, constraints, status, request_id)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, city, days, budget_yuan, constraints, status, request_id, created_at, updated_at, deleted_at
+INSERT INTO trips (city, days, budget_yuan, constraints, status, request_id, owner_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, city, days, budget_yuan, constraints, status, request_id, created_at, updated_at, deleted_at, owner_id
 `
 
 type CreateTripParams struct {
@@ -23,6 +24,7 @@ type CreateTripParams struct {
 	Constraints json.RawMessage `json:"constraints"`
 	Status      string          `json:"status"`
 	RequestID   *string         `json:"request_id"`
+	OwnerID     *string         `json:"owner_id"`
 }
 
 func (q *Queries) CreateTrip(ctx context.Context, arg CreateTripParams) (Trip, error) {
@@ -33,6 +35,7 @@ func (q *Queries) CreateTrip(ctx context.Context, arg CreateTripParams) (Trip, e
 		arg.Constraints,
 		arg.Status,
 		arg.RequestID,
+		arg.OwnerID,
 	)
 	var i Trip
 	err := row.Scan(
@@ -46,12 +49,13 @@ func (q *Queries) CreateTrip(ctx context.Context, arg CreateTripParams) (Trip, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getTrip = `-- name: GetTrip :one
-SELECT id, city, days, budget_yuan, constraints, status, request_id, created_at, updated_at, deleted_at FROM trips
+SELECT id, city, days, budget_yuan, constraints, status, request_id, created_at, updated_at, deleted_at, owner_id FROM trips
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -69,12 +73,13 @@ func (q *Queries) GetTrip(ctx context.Context, id string) (Trip, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getTripByRequestID = `-- name: GetTripByRequestID :one
-SELECT id, city, days, budget_yuan, constraints, status, request_id, created_at, updated_at, deleted_at FROM trips
+SELECT id, city, days, budget_yuan, constraints, status, request_id, created_at, updated_at, deleted_at, owner_id FROM trips
 WHERE request_id = $1 AND deleted_at IS NULL
 `
 
@@ -92,8 +97,156 @@ func (q *Queries) GetTripByRequestID(ctx context.Context, requestID *string) (Tr
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.OwnerID,
 	)
 	return i, err
+}
+
+const listAnonymousTrips = `-- name: ListAnonymousTrips :many
+SELECT t.id, t.city, t.days, t.budget_yuan, t.constraints, t.status, t.request_id, t.created_at, t.updated_at, t.deleted_at, t.owner_id,
+       COALESCE(to_jsonb(r.*), 'null'::jsonb)::jsonb AS latest_run,
+       COALESCE(to_jsonb(v.*), 'null'::jsonb)::jsonb AS latest_version
+FROM trips t
+LEFT JOIN LATERAL (
+  SELECT id, status, stage FROM runs
+  WHERE trip_id = t.id ORDER BY created_at DESC LIMIT 1
+) r ON true
+LEFT JOIN LATERAL (
+  SELECT seq, status, created_at FROM plan_versions
+  WHERE trip_id = t.id ORDER BY seq DESC LIMIT 1
+) v ON true
+WHERE t.owner_id IS NULL AND t.deleted_at IS NULL
+ORDER BY t.created_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type ListAnonymousTripsParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+type ListAnonymousTripsRow struct {
+	ID            string          `json:"id"`
+	City          string          `json:"city"`
+	Days          int32           `json:"days"`
+	BudgetYuan    *int32          `json:"budget_yuan"`
+	Constraints   json.RawMessage `json:"constraints"`
+	Status        string          `json:"status"`
+	RequestID     *string         `json:"request_id"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+	DeletedAt     *time.Time      `json:"deleted_at"`
+	OwnerID       *string         `json:"owner_id"`
+	LatestRun     json.RawMessage `json:"latest_run"`
+	LatestVersion json.RawMessage `json:"latest_version"`
+}
+
+func (q *Queries) ListAnonymousTrips(ctx context.Context, arg ListAnonymousTripsParams) ([]ListAnonymousTripsRow, error) {
+	rows, err := q.db.Query(ctx, listAnonymousTrips, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAnonymousTripsRow
+	for rows.Next() {
+		var i ListAnonymousTripsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.City,
+			&i.Days,
+			&i.BudgetYuan,
+			&i.Constraints,
+			&i.Status,
+			&i.RequestID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.OwnerID,
+			&i.LatestRun,
+			&i.LatestVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTripsByOwner = `-- name: ListTripsByOwner :many
+SELECT t.id, t.city, t.days, t.budget_yuan, t.constraints, t.status, t.request_id, t.created_at, t.updated_at, t.deleted_at, t.owner_id,
+       COALESCE(to_jsonb(r.*), 'null'::jsonb)::jsonb AS latest_run,
+       COALESCE(to_jsonb(v.*), 'null'::jsonb)::jsonb AS latest_version
+FROM trips t
+LEFT JOIN LATERAL (
+  SELECT id, status, stage FROM runs
+  WHERE trip_id = t.id ORDER BY created_at DESC LIMIT 1
+) r ON true
+LEFT JOIN LATERAL (
+  SELECT seq, status, created_at FROM plan_versions
+  WHERE trip_id = t.id ORDER BY seq DESC LIMIT 1
+) v ON true
+WHERE t.owner_id = $1 AND t.deleted_at IS NULL
+ORDER BY t.created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListTripsByOwnerParams struct {
+	OwnerID *string `json:"owner_id"`
+	Limit   int32   `json:"limit"`
+	Offset  int32   `json:"offset"`
+}
+
+type ListTripsByOwnerRow struct {
+	ID            string          `json:"id"`
+	City          string          `json:"city"`
+	Days          int32           `json:"days"`
+	BudgetYuan    *int32          `json:"budget_yuan"`
+	Constraints   json.RawMessage `json:"constraints"`
+	Status        string          `json:"status"`
+	RequestID     *string         `json:"request_id"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+	DeletedAt     *time.Time      `json:"deleted_at"`
+	OwnerID       *string         `json:"owner_id"`
+	LatestRun     json.RawMessage `json:"latest_run"`
+	LatestVersion json.RawMessage `json:"latest_version"`
+}
+
+func (q *Queries) ListTripsByOwner(ctx context.Context, arg ListTripsByOwnerParams) ([]ListTripsByOwnerRow, error) {
+	rows, err := q.db.Query(ctx, listTripsByOwner, arg.OwnerID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTripsByOwnerRow
+	for rows.Next() {
+		var i ListTripsByOwnerRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.City,
+			&i.Days,
+			&i.BudgetYuan,
+			&i.Constraints,
+			&i.Status,
+			&i.RequestID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.OwnerID,
+			&i.LatestRun,
+			&i.LatestVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const softDeleteTrip = `-- name: SoftDeleteTrip :exec

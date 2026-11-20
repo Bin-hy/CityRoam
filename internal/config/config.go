@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -32,8 +34,29 @@ type Config struct {
 	GuideSearchTimeout time.Duration
 	GuideCacheTTL      time.Duration
 
+	WeatherCacheTTL       time.Duration
+	WeatherToolTimeout    time.Duration
+	WeatherMaxCallsPerRun int
+
 	ResearchTimeout      time.Duration
 	ResearchMaxToolCalls int
+	SkillsDir            string
+
+	AuthEnabled               bool
+	OIDCIssuer                string
+	OIDCClientID              string
+	OIDCClientSecret          string
+	OIDCRedirectURI           string
+	OIDCScopes                []string
+	OIDCAudience              string
+	OIDCProviderName          string
+	OIDCPostLogoutRedirectURI string
+	AuthWebBaseURL            string
+	AuthSessionTTL            time.Duration
+	AuthCookieSecure          string
+	AdminEmails               []string
+	AdminSubs                 []string
+	CORSAllowedOrigins        []string
 }
 
 func Load() (Config, error) {
@@ -92,6 +115,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	weatherCacheTTL, err := envDuration("WEATHER_CACHE_TTL", 30*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	weatherTimeout, err := envDuration("WEATHER_TOOL_TIMEOUT", 3*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	weatherMaxCalls, err := envInt("WEATHER_MAX_CALLS_PER_RUN", 1, 1, 10)
+	if err != nil {
+		return Config{}, err
+	}
 	researchTimeout, err := envDuration("RESEARCH_TIMEOUT", 12*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -99,6 +134,67 @@ func Load() (Config, error) {
 	maxCalls, err := envInt("RESEARCH_MAX_TOOL_CALLS", 6, 1, 100)
 	if err != nil {
 		return Config{}, err
+	}
+
+	authEnabled, err := envBool("AUTH_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	sessionTTL, err := envDuration("AUTH_SESSION_TTL", 168*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	cookieSecure := envString("AUTH_COOKIE_SECURE", "auto")
+	if err := validateCookieSecure(cookieSecure); err != nil {
+		return Config{}, err
+	}
+	scopes := strings.Fields(envString("OIDC_SCOPES", "openid profile email"))
+	if len(scopes) == 0 {
+		return Config{}, errors.New("OIDC_SCOPES must not be empty")
+	}
+	cfg.AuthEnabled = authEnabled
+	cfg.OIDCIssuer = strings.TrimSpace(os.Getenv("OIDC_ISSUER"))
+	cfg.OIDCClientID = strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID"))
+	cfg.OIDCClientSecret = os.Getenv("OIDC_CLIENT_SECRET")
+	cfg.OIDCRedirectURI = strings.TrimSpace(os.Getenv("OIDC_REDIRECT_URI"))
+	cfg.OIDCScopes = scopes
+	cfg.OIDCAudience = strings.TrimSpace(os.Getenv("OIDC_AUDIENCE"))
+	cfg.OIDCProviderName = envString("OIDC_PROVIDER_NAME", "统一登录")
+	cfg.OIDCPostLogoutRedirectURI = strings.TrimSpace(os.Getenv("OIDC_POST_LOGOUT_REDIRECT_URI"))
+	cfg.AuthWebBaseURL = strings.TrimSpace(os.Getenv("AUTH_WEB_BASE_URL"))
+	cfg.AuthSessionTTL = sessionTTL
+	cfg.AuthCookieSecure = cookieSecure
+	cfg.AdminEmails = splitCSV(os.Getenv("ADMIN_EMAILS"))
+	cfg.AdminSubs = splitCSV(os.Getenv("ADMIN_SUBS"))
+	cfg.CORSAllowedOrigins = splitCSV(os.Getenv("CORS_ALLOWED_ORIGINS"))
+
+	if cfg.AuthEnabled {
+		if err := requireAuthEnv(cfg); err != nil {
+			return Config{}, err
+		}
+	}
+	if cfg.AuthWebBaseURL != "" {
+		if err := validateAbsoluteURL("AUTH_WEB_BASE_URL", cfg.AuthWebBaseURL); err != nil {
+			return Config{}, err
+		}
+	}
+	if cfg.OIDCRedirectURI != "" {
+		if err := validateAbsoluteURL("OIDC_REDIRECT_URI", cfg.OIDCRedirectURI); err != nil {
+			return Config{}, err
+		}
+	}
+	if cfg.OIDCPostLogoutRedirectURI != "" {
+		if err := validateAbsoluteURL("OIDC_POST_LOGOUT_REDIRECT_URI", cfg.OIDCPostLogoutRedirectURI); err != nil {
+			return Config{}, err
+		}
+	}
+	for _, origin := range cfg.CORSAllowedOrigins {
+		if origin == "*" {
+			return Config{}, errors.New("CORS_ALLOWED_ORIGINS must list explicit origins, not *")
+		}
+		if err := validateAbsoluteURL("CORS_ALLOWED_ORIGINS", origin); err != nil {
+			return Config{}, err
+		}
 	}
 
 	cfg.HotelPluginEnabled = hotelEnabled
@@ -111,8 +207,12 @@ func Load() (Config, error) {
 	cfg.GuideSearchAPIKey = os.Getenv("GUIDE_SEARCH_API_KEY")
 	cfg.GuideSearchTimeout = guideTimeout
 	cfg.GuideCacheTTL = guideCacheTTL
+	cfg.WeatherCacheTTL = weatherCacheTTL
+	cfg.WeatherToolTimeout = weatherTimeout
+	cfg.WeatherMaxCallsPerRun = weatherMaxCalls
 	cfg.ResearchTimeout = researchTimeout
 	cfg.ResearchMaxToolCalls = maxCalls
+	cfg.SkillsDir = envString("SKILLS_DIR", "skills")
 
 	return cfg, nil
 }
@@ -180,4 +280,62 @@ func parseLevel(raw string) (slog.Level, error) {
 	default:
 		return 0, fmt.Errorf("LOG_LEVEL must be one of debug, info, warn, error")
 	}
+}
+
+func splitCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func validateCookieSecure(raw string) error {
+	switch raw {
+	case "auto", "true", "false":
+		return nil
+	default:
+		return fmt.Errorf("AUTH_COOKIE_SECURE must be one of auto, true, false")
+	}
+}
+
+func requireAuthEnv(cfg Config) error {
+	required := []struct {
+		key   string
+		value string
+	}{
+		{"OIDC_ISSUER", cfg.OIDCIssuer},
+		{"OIDC_CLIENT_ID", cfg.OIDCClientID},
+		{"OIDC_CLIENT_SECRET", cfg.OIDCClientSecret},
+		{"OIDC_REDIRECT_URI", cfg.OIDCRedirectURI},
+	}
+	for _, item := range required {
+		if strings.TrimSpace(item.value) == "" {
+			return fmt.Errorf("%s is required when AUTH_ENABLED=true", item.key)
+		}
+	}
+	return validateAbsoluteURL("OIDC_ISSUER", cfg.OIDCIssuer)
+}
+
+func validateAbsoluteURL(key, raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid URL: %w", key, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%s must use http or https", key)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("%s must include a host", key)
+	}
+	return nil
 }

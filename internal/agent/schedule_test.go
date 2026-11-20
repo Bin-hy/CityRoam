@@ -9,13 +9,15 @@ import (
 )
 
 type fakeScheduler struct {
-	plan      domain.Itinerary
-	err       error
-	lastDraft domain.DraftPlan
+	plan        domain.Itinerary
+	err         error
+	lastDraft   domain.DraftPlan
+	lastOptions domain.ScheduleOptions
 }
 
 func (f *fakeScheduler) Build(draft domain.DraftPlan, constraints domain.ConstraintSet, pois map[string]domain.POI, routes domain.RouteProvider, options domain.ScheduleOptions) (domain.Itinerary, error) {
 	f.lastDraft = draft
+	f.lastOptions = options
 	if f.err != nil {
 		return domain.Itinerary{}, f.err
 	}
@@ -120,7 +122,7 @@ func TestValidateNode(t *testing.T) {
 			t.Fatalf("events = %v", got)
 		}
 		payload := events.events[0].payload.(map[string]any)
-		if payload["blocking"] != 1 || payload["warnings"] != 1 {
+		if payload["blocking"] != 1 || payload["warnings"] != 1 || payload["checked"] != 12 {
 			t.Fatalf("payload = %v", payload)
 		}
 	})
@@ -146,6 +148,43 @@ func TestValidateNode(t *testing.T) {
 		}
 		if out.Blocking != 0 {
 			t.Fatalf("unexpected blocking: %+v", out.Violations)
+		}
+	})
+
+	t.Run("rain forecast merges blocking violation", func(t *testing.T) {
+		pois := map[string]domain.POI{
+			"out-1": {ID: "out-1", Name: "长城", Outdoor: true},
+			"out-2": {ID: "out-2", Name: "颐和园", Outdoor: true},
+			"in-1":  {ID: "in-1", Name: "博物馆", Outdoor: false},
+		}
+		rainy := domain.Itinerary{City: "beijing", Days: []domain.DayPlan{{
+			Date: "2026-12-01",
+			Blocks: []domain.Block{
+				{ID: "b1", Type: domain.BlockTypePOI, POIID: "out-1"},
+				{ID: "b2", Type: domain.BlockTypePOI, POIID: "out-2"},
+				{ID: "b3", Type: domain.BlockTypePOI, POIID: "in-1"},
+			},
+		}}}
+		events := &eventRecorder{}
+		nodes := NewNodes(nil, events,
+			WithValidator(&fakeValidator{}),
+			WithNodeLogger(discardLogger()),
+		)
+		out, err := nodes.Validate(context.Background(), ValidateInput{
+			RunID: "run-3", Constraints: constraints, Plan: rainy, POIs: pois,
+			Research: &domain.ResearchBrief{Weather: []domain.WeatherDay{
+				{Date: "2026-12-01", DayWeather: "小雨"},
+			}},
+		})
+		if err != nil {
+			t.Fatalf("validate: %v", err)
+		}
+		if out.Blocking != 1 || len(out.Violations) != 1 || out.Violations[0].Code != "C13" {
+			t.Fatalf("violations = %+v", out.Violations)
+		}
+		payload := events.events[0].payload.(map[string]any)
+		if payload["checked"] != 13 {
+			t.Fatalf("checked = %v", payload["checked"])
 		}
 	})
 

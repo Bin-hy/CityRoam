@@ -64,6 +64,29 @@ func TestRepairNode(t *testing.T) {
 		}
 	}
 
+	t.Run("preserves lodging anchor while rescheduling", func(t *testing.T) {
+		events := &eventRecorder{}
+		scheduler := &fakeScheduler{plan: domain.Itinerary{City: "beijing", Days: []domain.DayPlan{{Date: "2026-12-01"}, {Date: "2026-12-02"}}}}
+		validator := &fakeValidator{}
+		llm := &fakeLLM{reply: patchReply(0, item("p-4", "poi", 120)),
+			usage: Usage{TotalTokens: 10, Attempts: 1}}
+		nodes := NewNodes(llm, events,
+			WithScheduler(scheduler), WithValidator(validator), WithNodeLogger(discardLogger()),
+		)
+		input := baseInput()
+		input.Research = &domain.ResearchBrief{Accommodation: &domain.AccommodationBrief{
+			Selected:        &domain.Hotel{ID: "h1", Name: "测试酒店", Lat: 39.9, Lng: 116.4},
+			AnchorDays:      []int{0},
+			IncludeInBudget: true,
+		}}
+		if _, err := nodes.Repair(context.Background(), input); err != nil {
+			t.Fatalf("repair: %v", err)
+		}
+		if scheduler.lastOptions.Lodging == nil || scheduler.lastOptions.Lodging.Hotel.ID != "h1" {
+			t.Fatalf("lodging anchor lost: %+v", scheduler.lastOptions)
+		}
+	})
+
 	t.Run("patches only the target day", func(t *testing.T) {
 		events := &eventRecorder{}
 		scheduler := &fakeScheduler{plan: domain.Itinerary{City: "beijing", Days: []domain.DayPlan{{Date: "2026-12-01"}, {Date: "2026-12-02"}}}}

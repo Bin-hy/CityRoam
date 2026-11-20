@@ -11,6 +11,7 @@ import (
 
 	"trippilot/internal/events"
 	"trippilot/internal/plugins"
+	"trippilot/internal/skills"
 )
 
 const defaultMaxBodyBytes = 64 << 10
@@ -29,6 +30,9 @@ type Deps struct {
 	Runner           RunStarter
 	Eval             EvalService
 	PluginStatuses   []plugins.Status
+	SkillCatalog     func() []skills.CatalogEntry
+	Auth             Authenticator
+	AllowedOrigins   []string
 }
 
 // NewRouter builds the public API. Handlers are filled in per endpoint card;
@@ -43,11 +47,17 @@ func NewRouter(deps Deps) http.Handler {
 	if deps.MaxBodyBytes <= 0 {
 		deps.MaxBodyBytes = defaultMaxBodyBytes
 	}
+	if deps.Auth == nil {
+		deps.Auth = disabledAuth{adminToken: deps.AdminToken}
+	}
 
 	router := chi.NewRouter()
 	router.Use(RequestID)
+	router.Use(RequestLogger(deps.Logger))
 	router.Use(Recover(deps.Logger))
 	router.Use(BodyLimit(deps.MaxBodyBytes))
+	router.Use(CORS(deps.AllowedOrigins))
+	router.Use(SameOrigin(deps.AllowedOrigins, deps.Auth.Enabled()))
 
 	router.Get("/healthz", handleHealth)
 	router.Get("/readyz", handleReady(deps))
@@ -56,29 +66,41 @@ func NewRouter(deps Deps) http.Handler {
 	router.Route("/api", func(api chi.Router) {
 		api.Group(func(public chi.Router) {
 			public.Use(RateLimit(deps.RateLimitPerHour, deps.Now))
-			public.Post("/trips", handleCreateTrip(deps))
-			public.Delete("/trips/{tripID}", handleDeleteTrip(deps))
-			public.Post("/trips/{tripID}/adjustments", handleCreateAdjustment(deps))
-			public.Post("/trips/{tripID}/replan", handleReplan(deps))
-			public.Post("/trips/{tripID}/versions/{seq}/restore", handleRestoreVersion(deps))
-			public.Post("/trips/{tripID}/share", handleCreateShare(deps))
-			public.Post("/runs/{runID}/resume", handleResumeRun(deps))
-			public.Post("/runs/{runID}/cancel", handleCancelRun(deps))
+			public.Get("/auth/me", deps.Auth.Me)
+			public.Get("/auth/login", deps.Auth.Login)
+			public.Get("/auth/callback", deps.Auth.Callback)
+			public.Post("/auth/logout", deps.Auth.Logout)
+			public.Get("/share/{slug}", handleGetShare(deps))
 		})
 
-		api.Get("/trips/{tripID}", handleGetTrip(deps))
-		api.Get("/trips/{tripID}/versions", handleListVersions(deps))
-		api.Get("/trips/{tripID}/versions/{seq}", handleGetVersion(deps))
-		api.Get("/trips/{tripID}/diff", handleDiff(deps))
+		api.Group(func(protected chi.Router) {
+			protected.Use(deps.Auth.Middleware)
 
-		api.Get("/runs/{runID}", handleNotImplemented())
-		api.Get("/runs/{runID}/trace", handleNotImplemented())
-		api.Get("/runs/{runID}/events", handleRunEvents(deps))
+			protected.Get("/trips", handleListTrips(deps))
+			protected.With(TripOwner(deps)).Get("/trips/{tripID}", handleGetTrip(deps))
+			protected.With(TripOwner(deps)).Get("/trips/{tripID}/versions", handleListVersions(deps))
+			protected.With(TripOwner(deps)).Get("/trips/{tripID}/versions/{seq}", handleGetVersion(deps))
+			protected.With(TripOwner(deps)).Get("/trips/{tripID}/diff", handleDiff(deps))
 
-		api.Get("/share/{slug}", handleGetShare(deps))
+			protected.With(RunOwner(deps)).Get("/runs/{runID}", handleNotImplemented())
+			protected.With(RunOwner(deps)).Get("/runs/{runID}/trace", handleNotImplemented())
+			protected.With(RunOwner(deps)).Get("/runs/{runID}/events", handleRunEvents(deps))
+
+			protected.Group(func(write chi.Router) {
+				write.Use(RateLimitBy(deps.RateLimitPerHour, deps.Now, principalRateKey))
+				write.Post("/trips", handleCreateTrip(deps))
+				write.With(TripOwner(deps)).Delete("/trips/{tripID}", handleDeleteTrip(deps))
+				write.With(TripOwner(deps)).Post("/trips/{tripID}/adjustments", handleCreateAdjustment(deps))
+				write.With(TripOwner(deps)).Post("/trips/{tripID}/replan", handleReplan(deps))
+				write.With(TripOwner(deps)).Post("/trips/{tripID}/versions/{seq}/restore", handleRestoreVersion(deps))
+				write.With(TripOwner(deps)).Post("/trips/{tripID}/share", handleCreateShare(deps))
+				write.With(RunOwner(deps)).Post("/runs/{runID}/resume", handleResumeRun(deps))
+				write.With(RunOwner(deps)).Post("/runs/{runID}/cancel", handleCancelRun(deps))
+			})
+		})
 
 		api.Route("/eval", func(eval chi.Router) {
-			eval.Use(AdminToken(deps.AdminToken))
+			eval.Use(deps.Auth.AdminOrToken(deps.AdminToken))
 			eval.Get("/cases", handleListEvalCases(deps))
 			eval.Post("/runs", handleStartEval(deps))
 			eval.Get("/runs", handleListEvalRuns(deps))
@@ -116,6 +138,11 @@ func handleMeta(deps Deps) http.HandlerFunc {
 		Enabled        bool   `json:"enabled"`
 		DisabledReason string `json:"disabled_reason,omitempty"`
 	}
+	type skillMeta struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		SHA256  string `json:"sha256"`
+	}
 	type meta struct {
 		Version  string   `json:"version"`
 		Cities   []string `json:"cities"`
@@ -129,26 +156,39 @@ func handleMeta(deps Deps) http.HandlerFunc {
 			PerHour int `json:"per_hour"`
 		} `json:"rate_limit"`
 		Plugins struct {
-			Hotels pluginMeta `json:"hotels"`
-			Guides pluginMeta `json:"guides"`
+			Hotels  pluginMeta `json:"hotels"`
+			Guides  pluginMeta `json:"guides"`
+			Weather pluginMeta `json:"weather"`
 		} `json:"plugins"`
-	}
-	payload := meta{Version: deps.Version, Cities: []string{"beijing"}}
-	payload.Defaults.Days = 2
-	payload.Defaults.Pace = "normal"
-	payload.Defaults.Currency = "CNY"
-	payload.Defaults.MaxTripDays = 4
-	payload.RateLimit.PerHour = deps.RateLimitPerHour
-	for _, status := range deps.PluginStatuses {
-		item := pluginMeta{Enabled: status.Enabled, DisabledReason: status.DisabledReason}
-		switch strings.ToLower(status.Name) {
-		case "hotel", "hotels":
-			payload.Plugins.Hotels = item
-		case "guide", "guides":
-			payload.Plugins.Guides = item
-		}
+		Skills []skillMeta `json:"skills,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		payload := meta{Version: deps.Version, Cities: []string{"beijing"}}
+		payload.Defaults.Days = 2
+		payload.Defaults.Pace = "normal"
+		payload.Defaults.Currency = "CNY"
+		payload.Defaults.MaxTripDays = 4
+		payload.RateLimit.PerHour = deps.RateLimitPerHour
+		for _, status := range deps.PluginStatuses {
+			item := pluginMeta{Enabled: status.Enabled, DisabledReason: status.DisabledReason}
+			switch strings.ToLower(status.Name) {
+			case "hotel", "hotels":
+				payload.Plugins.Hotels = item
+			case "guide", "guides":
+				payload.Plugins.Guides = item
+			case "weather":
+				payload.Plugins.Weather = item
+			}
+		}
+		if deps.SkillCatalog != nil {
+			for _, entry := range deps.SkillCatalog() {
+				payload.Skills = append(payload.Skills, skillMeta{
+					Name:    entry.Name,
+					Version: entry.Version,
+					SHA256:  entry.SHA256,
+				})
+			}
+		}
 		writeJSON(w, http.StatusOK, payload)
 	}
 }

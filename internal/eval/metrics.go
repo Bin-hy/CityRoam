@@ -12,16 +12,21 @@ import (
 
 // RunMetrics is stored in eval_runs.metrics and rendered by the dashboard.
 type RunMetrics struct {
-	HardPass      bool    `json:"hard_pass"`
-	RepairRounds  int     `json:"repair_rounds"`
-	LatencyMS     int64   `json:"latency_ms"`
-	POIValid      bool    `json:"poi_valid"`
-	JSONValidRate float64 `json:"json_valid_rate"`
-	JSONCalls     int     `json:"json_calls,omitempty"`
-	JSONAttempts  int     `json:"json_attempts,omitempty"`
-	Blocking      int     `json:"blocking"`
-	Warnings      int     `json:"warnings"`
-	Tokens        int     `json:"total_tokens,omitempty"`
+	HardPass       bool    `json:"hard_pass"`
+	RepairRounds   int     `json:"repair_rounds"`
+	LatencyMS      int64   `json:"latency_ms"`
+	POIValid       bool    `json:"poi_valid"`
+	JSONValidRate  float64 `json:"json_valid_rate"`
+	JSONCalls      int     `json:"json_calls,omitempty"`
+	JSONAttempts   int     `json:"json_attempts,omitempty"`
+	Blocking       int     `json:"blocking"`
+	Warnings       int     `json:"warnings"`
+	Tokens         int     `json:"total_tokens,omitempty"`
+	ResearchStatus string  `json:"research_status"`
+	ResearchMS     int64   `json:"research_ms"`
+	ToolCalls      int     `json:"tool_calls"`
+	LodgingYuan    int     `json:"lodging_yuan"`
+	GuideMatches   int     `json:"guide_matches"`
 }
 
 // Summary aggregates one batch.
@@ -49,6 +54,7 @@ type RunResult struct {
 // Report is the output of one full batch.
 type Report struct {
 	GeneratedAt time.Time   `json:"generated_at"`
+	Notes       []string    `json:"notes,omitempty"`
 	Results     []RunResult `json:"results"`
 	Summary     Summary     `json:"summary"`
 }
@@ -82,6 +88,7 @@ func Evaluate(c Case, state *agent.TripState) (RunMetrics, []string) {
 	metrics.Tokens = state.LLM.TotalTokens
 	metrics.JSONCalls = state.LLM.Calls
 	metrics.JSONAttempts = state.LLM.Attempts
+	applyResearchMetrics(&metrics, state)
 	if state.LLM.Attempts > 0 {
 		metrics.JSONValidRate = float64(state.LLM.Calls) / float64(state.LLM.Attempts)
 		if metrics.JSONValidRate > 1 {
@@ -128,8 +135,29 @@ func Evaluate(c Case, state *agent.TripState) (RunMetrics, []string) {
 		reasons = append(reasons, "命中需避开的内容："+hit)
 	}
 
+	if c.Expected.ResearchStatus != "" && metrics.ResearchStatus != c.Expected.ResearchStatus {
+		reasons = append(reasons, fmt.Sprintf("研究状态应为 %s，实际 %s", c.Expected.ResearchStatus, metrics.ResearchStatus))
+	}
+	if c.Expected.Lodging && metrics.LodgingYuan <= 0 {
+		reasons = append(reasons, "住宿费用未计入预算")
+	}
+
 	metrics.HardPass = len(reasons) == 0
 	return metrics, reasons
+}
+
+func applyResearchMetrics(metrics *RunMetrics, state *agent.TripState) {
+	metrics.ResearchStatus = "skipped"
+	metrics.LodgingYuan = state.Plan.Totals.LodgingYuan
+	if state.Research == nil {
+		return
+	}
+	if state.Research.Status != "" {
+		metrics.ResearchStatus = string(state.Research.Status)
+	}
+	metrics.ResearchMS = state.Research.DurationMS
+	metrics.ToolCalls = state.Research.ToolCalls
+	metrics.GuideMatches = len(state.Research.Guides)
 }
 
 func poiValid(state *agent.TripState) bool {
@@ -267,6 +295,14 @@ func Markdown(report Report) string {
 	fmt.Fprintf(&b, "- 生成时间：%s\n", report.GeneratedAt.Format(time.RFC3339))
 	fmt.Fprintf(&b, "- 用例数：%d\n\n", report.Summary.Cases)
 
+	if len(report.Notes) > 0 {
+		b.WriteString("## 运行环境\n\n")
+		for _, note := range report.Notes {
+			fmt.Fprintf(&b, "- %s\n", note)
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString("| 指标 | 值 |\n| --- | --- |\n")
 	fmt.Fprintf(&b, "| 硬约束满足率 | %.1f%% |\n", report.Summary.HardPassRate*100)
 	fmt.Fprintf(&b, "| 通过用例 | %d/%d |\n", report.Summary.Passed, report.Summary.Cases)
@@ -276,8 +312,8 @@ func Markdown(report Report) string {
 	fmt.Fprintf(&b, "| JSON 合法率 | %.1f%% |\n", report.Summary.JSONValidRate*100)
 	b.WriteString("| 人工评分 | 待填 |\n\n")
 
-	b.WriteString("| 用例 | 结果 | 硬约束 | 修复轮数 | 延迟 | POI | JSON | 说明 |\n")
-	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- |\n")
+	b.WriteString("| 用例 | 结果 | 硬约束 | 修复轮数 | 延迟 | POI | JSON | 研究 | 研究耗时 | 工具调用 | 住宿 | 攻略匹配 | 说明 |\n")
+	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	for _, result := range report.Results {
 		status := "失败"
 		if result.Passed {
@@ -295,7 +331,7 @@ func Markdown(report Report) string {
 		if reason == "" {
 			reason = "-"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %d | %d ms | %s | %.1f%% | %s |\n",
+		fmt.Fprintf(&b, "| %s | %s | %s | %d | %d ms | %s | %.1f%% | %s | %d ms | %d | %d | %d | %s |\n",
 			result.CaseID,
 			status,
 			hard,
@@ -303,6 +339,11 @@ func Markdown(report Report) string {
 			result.Metrics.LatencyMS,
 			poi,
 			result.Metrics.JSONValidRate*100,
+			result.Metrics.ResearchStatus,
+			result.Metrics.ResearchMS,
+			result.Metrics.ToolCalls,
+			result.Metrics.LodgingYuan,
+			result.Metrics.GuideMatches,
 			strings.ReplaceAll(reason, "|", "/"),
 		)
 	}
@@ -314,8 +355,8 @@ func DryRunMarkdown(cases []Case) string {
 	var b strings.Builder
 	b.WriteString("# TripPilot 评测预检\n\n")
 	fmt.Fprintf(&b, "- 用例数：%d\n\n", len(cases))
-	b.WriteString("| 用例 | 天数 | 必去 | 避开 | 标签 |\n")
-	b.WriteString("| --- | --- | --- | --- | --- |\n")
+	b.WriteString("| 用例 | 天数 | 必去 | 避开 | 标签 | 研究 | 研究耗时 | 工具调用 | 住宿 | 攻略匹配 |\n")
+	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	for _, item := range cases {
 		must := strings.Join(item.Expected.MustVisit, "、")
 		if must == "" {
@@ -325,7 +366,7 @@ func DryRunMarkdown(cases []Case) string {
 		if avoid == "" {
 			avoid = "-"
 		}
-		fmt.Fprintf(&b, "| %s | %d | %s | %s | %s |\n",
+		fmt.Fprintf(&b, "| %s | %d | %s | %s | %s | skipped | 0 ms | 0 | 0 | 0 |\n",
 			item.CaseID, item.Expected.Days, must, avoid, strings.Join(item.Tags, ","))
 	}
 	return b.String()

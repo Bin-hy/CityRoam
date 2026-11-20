@@ -64,7 +64,7 @@ func run() error {
 	options := []agent.NodeOption{
 		agent.WithSnapshotSource(snapshot),
 		agent.WithPOILookup(snapshot),
-		agent.WithRouteProvider(tools.NewRouteService(amap, "beijing")),
+		agent.WithRouteProvider(tools.NewRouteService(amap, "北京")),
 	}
 	if amap != nil {
 		options = append(options, agent.WithExternalSource(tools.NewAMapSource(amap)))

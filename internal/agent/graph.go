@@ -8,6 +8,7 @@ import (
 	"github.com/cloudwego/eino/compose"
 
 	"trippilot/internal/domain"
+	"trippilot/internal/skills"
 )
 
 const (
@@ -157,7 +158,7 @@ func (g *Graph) Run(ctx context.Context, state *TripState) (*TripState, error) {
 	return out, nil
 }
 
-func (g *Graph) admit(_ context.Context, state *TripState) (*TripState, error) {
+func (g *Graph) admit(ctx context.Context, state *TripState) (*TripState, error) {
 	if state == nil {
 		return nil, &NodeError{Code: "invalid_state", Message: "状态为空"}
 	}
@@ -168,6 +169,19 @@ func (g *Graph) admit(_ context.Context, state *TripState) (*TripState, error) {
 		return nil, &NodeError{Code: "empty_input", Message: "行程需求不能为空"}
 	}
 	state.Status = StatusRunning
+	if !state.SkillsPinned {
+		var pins []skills.CatalogEntry
+		if g.nodes.skillProvider != nil {
+			catalog, err := g.nodes.skillProvider.List(ctx)
+			if err != nil {
+				return nil, &NodeError{Code: "skills_unavailable", Message: "技能目录暂时不可用", Err: err}
+			}
+			pins = catalog
+		}
+		state.SkillPins = pins
+		state.Skills = nil
+		state.SkillsPinned = true
+	}
 	return state, nil
 }
 
@@ -210,6 +224,8 @@ func (g *Graph) research(ctx context.Context, state *TripState) (*TripState, err
 		Constraints:   state.Constraints,
 		Candidates:    state.Candidates,
 		ResolvedHotel: state.ResolvedHotel,
+		Skills:        state.Skills,
+		SkillPins:     state.SkillPins,
 	})
 	if err != nil {
 		return nil, err
@@ -260,6 +276,7 @@ func (g *Graph) validate(ctx context.Context, state *TripState) (*TripState, err
 		Constraints: state.Constraints,
 		Plan:        state.Plan,
 		POIs:        poiMap(state.Candidates),
+		Research:    state.Research,
 	})
 	if err != nil {
 		return nil, err
@@ -309,6 +326,7 @@ func (g *Graph) repair(ctx context.Context, state *TripState) (*TripState, error
 		Candidates:  state.Candidates,
 		Violations:  state.Violations,
 		Round:       round,
+		Research:    state.Research,
 	})
 	if err != nil {
 		return nil, err

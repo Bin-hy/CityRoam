@@ -1,0 +1,20 @@
+{
+  "case_id": "p4-tool-timeout",
+  "input": "北京一日游，预算 300 元，节奏正常，不需要住酒店。",
+  "tags": [
+    "plugin",
+    "hotel",
+    "timeout",
+    "degraded"
+  ],
+  "expected": {
+    "days": 1,
+    "hard_rules": [
+      "C5",
+      "C8"
+    ],
+    "must_visit": [],
+    "avoid": [],
+    "research_status": "degraded"
+  }
+}

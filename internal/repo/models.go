@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+type AuthRequest struct {
+	State        string    `json:"state"`
+	Nonce        string    `json:"nonce"`
+	CodeVerifier string    `json:"code_verifier"`
+	ReturnTo     string    `json:"return_to"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 type EvalCase struct {
 	ID       string          `json:"id"`
 	Input    string          `json:"input"`
@@ -114,6 +123,15 @@ type RunEvent struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
+type Session struct {
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
+	UserAgent *string   `json:"user_agent"`
+	Ip        *string   `json:"ip"`
+}
+
 type ShareLink struct {
 	Slug      string     `json:"slug"`
 	TripID    string     `json:"trip_id"`
@@ -147,4 +165,19 @@ type Trip struct {
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
 	DeletedAt   *time.Time      `json:"deleted_at"`
+	OwnerID     *string         `json:"owner_id"`
+}
+
+type User struct {
+	ID            string     `json:"id"`
+	Issuer        string     `json:"issuer"`
+	Subject       string     `json:"subject"`
+	Email         *string    `json:"email"`
+	EmailVerified bool       `json:"email_verified"`
+	Name          *string    `json:"name"`
+	AvatarUrl     *string    `json:"avatar_url"`
+	Role          string     `json:"role"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	LastLoginAt   *time.Time `json:"last_login_at"`
 }

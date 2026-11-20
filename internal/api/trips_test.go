@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -61,6 +62,7 @@ func (s *fakeTripStore) CreateTripAndRun(_ context.Context, tripArg repo.CreateT
 		Constraints: tripArg.Constraints,
 		Status:      tripArg.Status,
 		RequestID:   tripArg.RequestID,
+		OwnerID:     tripArg.OwnerID,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -263,6 +265,20 @@ func (s *fakeTripStore) GetRun(_ context.Context, id string) (repo.Run, error) {
 	return repo.Run{}, pgx.ErrNoRows
 }
 
+func (s *fakeTripStore) setRunStatus(runID, status string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for tripID, runs := range s.runs {
+		for index := range runs {
+			if runs[index].ID == runID {
+				runs[index].Status = status
+				s.runs[tripID] = runs
+				return
+			}
+		}
+	}
+}
+
 func (s *fakeTripStore) runsTrip(runID string) string {
 	for tripID, runs := range s.runs {
 		for _, run := range runs {
@@ -282,6 +298,10 @@ type fakeRunner struct {
 	cancelled []string
 	resumeErr error
 	cancelErr error
+	store     *fakeTripStore
+	// resumeStatus overrides the status written back for a resume kind so
+	// handler tests can model proposal rejects that stay awaiting.
+	resumeStatus map[agent.ResumeKind]string
 }
 
 func (r *fakeRunner) Start(_ context.Context, runID string) error {
@@ -299,11 +319,30 @@ func (r *fakeRunner) StartRequest(_ context.Context, runID, requestID string) er
 	return nil
 }
 
-func (r *fakeRunner) Resume(_ context.Context, _ string, action agent.ResumeAction) error {
+func (r *fakeRunner) Resume(_ context.Context, runID string, action agent.ResumeAction) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.resumed = append(r.resumed, action)
-	return r.resumeErr
+	if r.resumeErr != nil || r.store == nil {
+		return r.resumeErr
+	}
+	status := r.resumeStatus[action.Kind]
+	if status == "" {
+		status = defaultResumeStatus(action.Kind)
+	}
+	r.store.setRunStatus(runID, status)
+	return nil
+}
+
+func defaultResumeStatus(kind agent.ResumeKind) string {
+	switch kind {
+	case agent.ResumeAccept:
+		return agent.StatusCompleted
+	case agent.ResumeReject:
+		return agent.StatusCancelled
+	default:
+		return agent.StatusQueued
+	}
 }
 
 func (r *fakeRunner) Cancel(_ context.Context, runID string) error {
@@ -452,4 +491,68 @@ func TestTrips(t *testing.T) {
 			t.Fatalf("deleted get status = %d", rec.Code)
 		}
 	})
+}
+
+func (s *fakeTripStore) ListTripsByOwner(_ context.Context, ownerID string, limit, offset int32) ([]repo.ListTripsByOwnerRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listTrips(func(trip repo.Trip) bool {
+		return trip.OwnerID != nil && *trip.OwnerID == ownerID
+	}, limit, offset)
+}
+
+func (s *fakeTripStore) ListAnonymousTrips(_ context.Context, limit, offset int32) ([]repo.ListAnonymousTripsRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.listTrips(func(trip repo.Trip) bool { return trip.OwnerID == nil }, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]repo.ListAnonymousTripsRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, repo.ListAnonymousTripsRow{
+			ID: row.ID, City: row.City, Days: row.Days, BudgetYuan: row.BudgetYuan,
+			Constraints: row.Constraints, Status: row.Status, RequestID: row.RequestID,
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, DeletedAt: row.DeletedAt,
+			OwnerID: row.OwnerID, LatestRun: row.LatestRun, LatestVersion: row.LatestVersion,
+		})
+	}
+	return out, nil
+}
+
+func (s *fakeTripStore) listTrips(match func(repo.Trip) bool, limit, offset int32) ([]repo.ListTripsByOwnerRow, error) {
+	trips := make([]repo.Trip, 0, len(s.trips))
+	for id, trip := range s.trips {
+		if s.deleted[id] || !match(trip) {
+			continue
+		}
+		trips = append(trips, trip)
+	}
+	sort.Slice(trips, func(i, j int) bool { return trips[i].CreatedAt.After(trips[j].CreatedAt) })
+	start := int(offset)
+	if start > len(trips) {
+		start = len(trips)
+	}
+	end := start + int(limit)
+	if end > len(trips) {
+		end = len(trips)
+	}
+	rows := make([]repo.ListTripsByOwnerRow, 0, end-start)
+	for _, trip := range trips[start:end] {
+		row := repo.ListTripsByOwnerRow{
+			ID: trip.ID, City: trip.City, Days: trip.Days, BudgetYuan: trip.BudgetYuan,
+			Constraints: trip.Constraints, Status: trip.Status, RequestID: trip.RequestID,
+			CreatedAt: trip.CreatedAt, UpdatedAt: trip.UpdatedAt, DeletedAt: trip.DeletedAt,
+			OwnerID: trip.OwnerID, LatestRun: json.RawMessage("null"), LatestVersion: json.RawMessage("null"),
+		}
+		if runs := s.runs[trip.ID]; len(runs) > 0 {
+			row.LatestRun, _ = json.Marshal(tripListRun{ID: runs[0].ID, Status: runs[0].Status, Stage: runs[0].Stage})
+		}
+		if versions := s.versions[trip.ID]; len(versions) > 0 {
+			latest := versions[len(versions)-1]
+			row.LatestVersion, _ = json.Marshal(tripListVersion{Seq: latest.Seq, Status: latest.Status, CreatedAt: latest.CreatedAt})
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }

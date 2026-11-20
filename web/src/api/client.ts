@@ -41,6 +41,7 @@ export async function apiRequest<T>(path: string, init: ApiRequestInit = {}): Pr
     method: init.method ?? "GET",
     headers,
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    credentials: "include",
     signal: init.signal,
   });
   const responseRequestId = response.headers.get("X-Request-ID") ?? requestId;

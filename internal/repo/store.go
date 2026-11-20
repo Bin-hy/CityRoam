@@ -262,6 +262,13 @@ func (s *Store) ListRunsByStatus(ctx context.Context, statuses []string) ([]Run,
 	return s.q.ListRunsByStatus(ctx, statuses)
 }
 
+func (s *Store) UpdateRunMode(ctx context.Context, runID, mode string) error {
+	if _, err := s.pool.Exec(ctx, "UPDATE runs SET mode = $2 WHERE id = $1", runID, mode); err != nil {
+		return fmt.Errorf("store: update run mode: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) ListPlanVersions(ctx context.Context, tripID string) ([]PlanVersion, error) {
 	return s.q.ListPlanVersions(ctx, tripID)
 }

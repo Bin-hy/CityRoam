@@ -1,295 +1,461 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useParams } from "react-router-dom";
-import { ArrowLeft, Loader2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { loginURL } from "@/api/auth";
+import { ApiError } from "@/api/client";
+import type { PlanVersion, ResearchChoice } from "@/api/types";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ErrorState } from "@/components/StateMessage";
-import { useMeta } from "@/hooks/useMeta";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { useRunStream } from "@/hooks/useRunStream";
-import { useTrip } from "@/features/trips/useTrip";
-import { parseItinerary } from "@/features/itinerary/types";
-import { parseResearch } from "@/features/research/types";
-import { ResearchPanel } from "@/features/research/ResearchPanel";
-import { BudgetModeToggle } from "@/features/research/BudgetModeToggle";
-import { RunTrace } from "@/features/trace/RunTrace";
-import { stageLabels, type RunStatus } from "@/features/trace/traceReducer";
-import { ItineraryTimeline } from "@/features/timeline/ItineraryTimeline";
-import { TripMap } from "@/features/map/TripMap";
-import { BudgetPanel } from "@/features/budget/BudgetPanel";
-import { VersionPanel } from "@/features/versions/VersionPanel";
+import { BudgetPopover } from "@/features/budget/BudgetPopover";
+import { Composer, type ComposerMode } from "@/features/conversation/Composer";
+import { ConversationRail } from "@/features/conversation/ConversationRail";
+import { deriveCanvas } from "@/features/conversation/deriveCanvas";
+import {
+  deriveConversation,
+  type ConversationItem,
+} from "@/features/conversation/deriveConversation";
+import { deriveRunView, type RunView } from "@/features/conversation/deriveRunView";
+import { asString, type RunEvent } from "@/features/conversation/eventParse";
+import type { JumpTarget } from "@/features/conversation/narrate";
+import { useSession, type SessionAction } from "@/features/conversation/useSession";
+import {
+  buildResultModel,
+  resolveResultSelection,
+  type ResultSelection,
+  type ResultViewMode,
+} from "@/features/result/model";
+import { ResultSheet } from "@/features/result/ResultSheet";
+import { ResultShell } from "@/features/result/ResultShell";
 import { ShareDialog } from "@/features/share/ShareDialog";
-import { RunActions } from "./RunActions";
+import type { RunStatus } from "@/features/conversation/deriveRunView";
+import { useTrip } from "@/features/trips/useTrip";
+import { VersionMenu } from "@/features/versions/VersionMenu";
+import { hasAMapKey } from "@/lib/mapKey";
 
-const terminalStatuses = new Set(["awaiting_user", "completed", "failed", "cancelled"]);
+const terminalStatuses = new Set<RunStatus>(["completed", "failed", "cancelled"]);
 
 export function WorkspacePage() {
   const { tripId } = useParams();
   const location = useLocation();
-  const routeRunID = (location.state as { runId?: string } | null)?.runId;
+  const routeRunID = (location.state as { runId?: string } | null)?.runId ?? null;
   const tripQuery = useTrip(tripId);
-  const metaQuery = useMeta();
   const trip = tripQuery.data;
-  const [overrideRunID, setOverrideRunID] = useState<string | null>(null);
-  const runID = overrideRunID ?? routeRunID ?? trip?.latest_run?.id;
-  const trace = useRunStream(runID, { enabled: Boolean(runID) });
-  const itinerary = useMemo(() => parseItinerary(trip?.latest_version?.plan), [trip?.latest_version?.plan]);
-  const poiNames = useMemo(() => {
-    const names: Record<string, string> = {};
-    for (const day of itinerary?.days ?? []) {
-      for (const block of day.blocks) {
-        if (block.type === "poi" && block.poi_id) names[block.poi_id] = block.title;
-      }
-    }
-    return names;
-  }, [itinerary]);
-  const [selectedBlockID, setSelectedBlockID] = useState<string | null>(null);
-  const isDesktop = useMediaQuery("(min-width: 1024px)");
+  const queryClient = useQueryClient();
 
+  // Keep the first run id per trip: trip refetches after adjustments must not
+  // reset the session's frozen turns.
+  const boot = useRef<{ tripID?: string; runID: string | null }>({
+    tripID: tripId,
+    runID: routeRunID,
+  });
+  if (boot.current.tripID !== tripId) {
+    boot.current = { tripID: tripId, runID: routeRunID };
+  }
+  if (trip && !boot.current.runID) {
+    boot.current = { tripID: tripId, runID: routeRunID ?? trip.latest_run?.id ?? null };
+  }
+  const initialRunID = boot.current.runID ?? routeRunID ?? null;
+
+  const session = useSession(tripId ?? "", initialRunID);
+  const desktop = useMediaQuery("(min-width: 1024px)");
+
+  const [activeDay, setActiveDay] = useState<number | null>(null);
+  const [selection, setSelection] = useState<ResultSelection>(null);
+  const [resultView, setResultView] = useState<ResultViewMode>("dossier");
+  const [viewVersion, setViewVersion] = useState<PlanVersion | null>(null);
+  const [canvasOpen, setCanvasOpen] = useState(false);
+  const [prefill, setPrefill] = useState("");
+  const [focusToken, setFocusToken] = useState(0);
+  const lastAction = useRef<SessionAction | null>(null);
+
+  const view = useMemo(() => deriveRunView(session.events), [session.events]);
+  const currentCanvas = useMemo(
+    () => deriveCanvas(session.events, trip, null),
+    [session.events, trip],
+  );
+  const canvas = useMemo(
+    () => (viewVersion ? deriveCanvas(session.events, trip, viewVersion) : currentCanvas),
+    [viewVersion, session.events, trip, currentCanvas],
+  );
+  const result = useMemo(
+    () =>
+      buildResultModel({
+        itinerary: canvas.model.plan,
+        explanations: canvas.model.explanations,
+        research: canvas.model.research,
+      }),
+    [canvas],
+  );
+  const conversation = useMemo(() => {
+    const items: ConversationItem[] = [];
+    for (const turn of session.turns) {
+      items.push(...deriveConversation(turn.runId, turn.events));
+    }
+    if (session.activeRunId) {
+      items.push(...deriveConversation(session.activeRunId, session.events));
+    }
+    return items;
+  }, [session.turns, session.activeRunId, session.events]);
+
+  const fallbackStatus = (trip?.latest_run?.status ?? "idle") as RunStatus;
+  const status: RunStatus =
+    view.status !== "idle"
+      ? view.status
+      : session.activeRunId && session.activeRunId !== trip?.latest_run?.id
+        ? "queued"
+        : fallbackStatus;
+
+  const baseVersion = currentCanvas.model.versionSeq ?? 0;
+  const awaitingStage = useMemo(() => lastAwaitingStage(session.events), [session.events]);
+  const composerMode = resolveComposerMode(status, view, awaitingStage, baseVersion);
+
+  const constraints = (trip?.constraints ?? {}) as Record<string, unknown>;
+  const budget = asRecord(constraints.budget);
+  const includeLodging =
+    typeof budget.include_lodging === "boolean" ? budget.include_lodging : true;
+  const dayCount = currentCanvas.model.plan?.days.length ?? 0;
+
+  const tripID = trip?.id;
   const refetchTrip = tripQuery.refetch;
   useEffect(() => {
-    if (terminalStatuses.has(trace.status)) {
-      void refetchTrip();
+    if (!tripID || !terminalStatuses.has(view.status)) return;
+    void refetchTrip();
+    void queryClient.invalidateQueries({ queryKey: ["plan-versions", tripID] });
+  }, [view.status, tripID, refetchTrip, queryClient]);
+
+  useEffect(() => {
+    if (activeDay !== null && dayCount > 0 && activeDay >= dayCount) setActiveDay(null);
+  }, [activeDay, dayCount]);
+
+  useEffect(() => {
+    if (!selection) return;
+    if (
+      selection.kind !== "hotel" &&
+      activeDay !== null &&
+      selection.dayIndex !== activeDay
+    ) {
+      setSelection(null);
+      return;
     }
-  }, [trace.status, refetchTrip]);
+    if (!result || !resolveResultSelection(result, selection)) setSelection(null);
+  }, [selection, activeDay, result]);
+
+  useEffect(() => {
+    setViewVersion(null);
+  }, [session.activeRunId]);
+
+  useEffect(() => {
+    setActiveDay(null);
+    setSelection(null);
+    setResultView("dossier");
+    setViewVersion(null);
+    setCanvasOpen(false);
+    setPrefill("");
+  }, [tripId]);
 
   if (tripQuery.isPending) {
     return <WorkspaceSkeleton />;
   }
 
   if (tripQuery.isError || !trip) {
+    const unauthorized = tripQuery.error instanceof ApiError && tripQuery.error.status === 401;
+    const notFound = tripQuery.error instanceof ApiError && tripQuery.error.status === 404;
     return (
       <main className="mx-auto max-w-xl px-4 py-16">
         <ErrorState
-          title="行程加载失败"
-          description="链接可能已失效，或服务暂时不可用。"
-          onRetry={() => void tripQuery.refetch()}
+          title={unauthorized ? "会话已过期" : notFound ? "行程不存在" : "行程加载失败"}
+          description={
+            unauthorized
+              ? "登录状态已失效，请重新登录后继续查看这次行程。"
+              : notFound
+                ? "链接可能已失效，或该行程属于其他账号。"
+                : "服务暂时不可用，请稍后重试。"
+          }
+          onRetry={unauthorized ? undefined : () => void tripQuery.refetch()}
           action={
-            <Button size="sm" variant="outline" asChild>
-              <Link to="/">返回首页</Link>
-            </Button>
+            unauthorized ? (
+              <Button size="sm" asChild>
+                <a href={loginURL(`${location.pathname}${location.search}`)}>重新登录</a>
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" asChild>
+                <Link to="/">返回首页</Link>
+              </Button>
+            )
           }
         />
       </main>
     );
   }
 
-  const tripStatus = trip.latest_run?.status;
-  const traceTerminal = trace.status === "completed" || trace.status === "failed" || trace.status === "cancelled";
-  const tripTerminal = tripStatus === "completed" || tripStatus === "failed" || tripStatus === "cancelled";
-  const status: RunStatus = traceTerminal
-    ? trace.status
-    : tripTerminal
-      ? tripStatus
-      : trace.status !== "idle"
-        ? trace.status
-        : ((tripStatus ?? "idle") as RunStatus);
-  const stage = trace.lastSeq > 0 && !tripTerminal ? trace.stage : (trip.latest_run?.stage ?? trace.stage);
-  const research = parseResearch(trip.latest_version?.research);
-  const constraints = (trip.constraints ?? {}) as Record<string, unknown>;
-  const lodging = (constraints.lodging ?? {}) as Record<string, unknown>;
-  const budget = (constraints.budget ?? {}) as Record<string, unknown>;
-  const includeLodging = typeof budget.include_lodging === "boolean" ? budget.include_lodging : true;
-  const hasLodging = (itinerary?.totals.lodging_yuan ?? 0) > 0;
+  const tripIDValue = trip.id;
+  const cityLabel =
+    canvas.model.plan?.city || (trip.city === "beijing" ? "北京" : trip.city) || "";
+  const days = canvas.model.plan?.days.length || trip.days || 0;
+  const lodgingPending = session.pending === "replanLodging";
+  const actionError = lastAction.current === "replanLodging" ? session.error : null;
 
-  const researchCard = (
-    <Card>
-      <CardHeader>
-        <CardTitle>研究与住宿</CardTitle>
-        <CardDescription>住宿建议与外部攻略摘要，仅供参考。</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ResearchPanel
-          research={research}
-          plugins={metaQuery.data?.plugins}
-          loading={status === "running" && trace.stage === "research"}
-          poiNames={poiNames}
-        />
-      </CardContent>
-    </Card>
+  function focusComposer() {
+    setFocusToken((token) => token + 1);
+  }
+
+  function jumpTo(target: JumpTarget) {
+    setActiveDay(target.day);
+    const day = currentCanvas.model.plan?.days[target.day];
+    const block = day
+      ? target.blockID
+        ? day.blocks.find((item) => item.id === target.blockID)
+        : target.poiID
+          ? day.blocks.find((item) => item.poi_id === target.poiID)
+          : undefined
+      : undefined;
+    const resultDay = result?.days.find((item) => item.index === target.day);
+    const stopID =
+      block && resultDay?.stops.some((stop) => stop.id === block.id)
+        ? block.id
+        : resultDay?.stops[0]?.id;
+    setSelection(
+      stopID ? { kind: "stop", dayIndex: target.day, stopID } : null,
+    );
+    focusComposer();
+    if (!desktop) setCanvasOpen(true);
+  }
+
+  function adjustDay(dayIndex: number) {
+    setActiveDay(dayIndex);
+    setPrefill(`调整第 ${dayIndex + 1} 天：`);
+    setCanvasOpen(false);
+    focusComposer();
+  }
+
+  function toggleLodging() {
+    if (baseVersion <= 0) return;
+    lastAction.current = "replanLodging";
+    void session.actions
+      .replanLodging(
+        { ...constraints, budget: { ...budget, include_lodging: !includeLodging } },
+        baseVersion,
+      )
+      .then((ok) => {
+        if (ok) lastAction.current = null;
+      });
+  }
+
+  function viewVersionBy(version: PlanVersion) {
+    setViewVersion(version);
+    setSelection(null);
+  }
+
+  function returnCurrent() {
+    setViewVersion(null);
+    setSelection(null);
+  }
+
+  function handleRestored(version: PlanVersion) {
+    setViewVersion(null);
+    setSelection(null);
+    session.actions.addSystemNotice(`已恢复版本 v${version.seq}。`);
+    void tripQuery.refetch();
+    void queryClient.invalidateQueries({ queryKey: ["plan-versions", tripIDValue] });
+  }
+
+  async function submitComposer(text: string): Promise<boolean> {
+    let ok = false;
+    if (composerMode.kind === "supplement") {
+      lastAction.current = "supplement";
+      ok = await session.actions.supplement(text);
+    } else if (composerMode.kind === "revise") {
+      lastAction.current = "revise";
+      ok = await session.actions.revise(text);
+    } else if (composerMode.kind === "adjust") {
+      lastAction.current = "adjust";
+      ok = await session.actions.adjust(text, composerMode.baseVersion);
+    }
+    if (ok) setPrefill("");
+    return ok;
+  }
+
+  const composer = (
+    <Composer
+      mode={composerMode}
+      pending={session.pending}
+      error={session.error}
+      stage={view.stage}
+      prefill={prefill}
+      focusToken={focusToken}
+      onSubmit={submitComposer}
+      onStop={() => void session.actions.cancel()}
+    />
   );
 
-  const mapCard = (
-    <Card>
-      <CardHeader>
-        <CardTitle>地图</CardTitle>
-        <CardDescription>按天展示路线与标记，点击标记同步时间轴。</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {itinerary ? (
-          <TripMap itinerary={itinerary} selectedBlockID={selectedBlockID} onSelectBlock={setSelectedBlockID} />
-        ) : (
-          <div className="flex h-64 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground">
-            等待方案生成…
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
+  const share = trip.latest_version ? <ShareDialog tripID={trip.id} /> : null;
 
-  const timelineCard = (
-    <Card>
-      <CardHeader>
-        <CardTitle>时间轴</CardTitle>
-        <CardDescription>
-          {selectedBlockID ? `已选中 ${selectedBlockID}，地图将同步高亮。` : "按天查看景点、餐饮与交通。"}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {itinerary ? (
-          <ItineraryTimeline
-            itinerary={itinerary}
-            selectedBlockID={selectedBlockID}
-            onSelectBlock={setSelectedBlockID}
-          />
-        ) : (
-          <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            等待方案生成…
-          </div>
-        )}
-      </CardContent>
-    </Card>
+  const moreControls = (
+    <>
+      <BudgetPopover
+        budget={result?.budget ?? null}
+        includeLodging={includeLodging}
+        pending={lodgingPending}
+        onToggleLodging={toggleLodging}
+      />
+      <VersionMenu
+        tripID={trip.id}
+        currentSeq={currentCanvas.model.versionSeq}
+        plan={currentCanvas.model.plan}
+        onViewVersion={viewVersionBy}
+        onRestored={handleRestored}
+        onReturnCurrent={returnCurrent}
+      />
+      {share}
+    </>
   );
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b bg-card/80 px-4 py-3 backdrop-blur">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild>
-            <Link to="/" aria-label="返回首页">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-          </Button>
-          <div>
-            <h1 className="text-base font-semibold">
-              {trip.city === "beijing" || !trip.city ? "北京" : trip.city} · {trip.days} 天
-            </h1>
-            <p className="text-xs text-muted-foreground">Trip {trip.id.slice(0, 8)}</p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <Badge variant={status === "failed" ? "destructive" : status === "awaiting_user" ? "warning" : "secondary"}>
-            {stageLabels[stage] ?? stage}
-          </Badge>
-          <span>{status}</span>
-          {trip.latest_version && <ShareDialog tripID={trip.id} />}
-        </div>
-      </header>
-
-      <main className="grid flex-1 gap-4 p-4 lg:grid-cols-[300px_minmax(0,1fr)_320px]">
-        <aside className="order-2 min-h-[420px] lg:order-1">
-          <RunTrace state={trace} connected={trace.connected} />
-        </aside>
-
-        <section className="order-1 space-y-4 lg:order-2">
-          <RunActions
-            tripID={trip.id}
-            runID={runID ?? null}
+    <div className="flex h-[calc(100dvh-3.5rem)] min-h-0 flex-col overflow-hidden bg-paper">
+      <div className="flex min-h-0 flex-1">
+        <aside
+          aria-label="对话"
+          className="flex min-h-0 w-full shrink-0 flex-col border-hairline lg:w-[360px] lg:border-r xl:w-[400px]"
+        >
+          <ConversationRail
+            city={cityLabel}
+            days={days}
             status={status}
-            missing={trace.missing}
-            proposal={trace.proposal}
-            researchQuestion={trace.researchQuestion}
-            baseVersion={trip.latest_version?.seq ?? null}
-            onRunStarted={setOverrideRunID}
-            onActionComplete={() => void tripQuery.refetch()}
+            connected={session.connected}
+            items={conversation}
+            notices={session.notices}
+            composer={composer}
+            pending={session.pending}
+            error={session.error}
+            onJump={jumpTo}
+            onOpenCanvas={() => setCanvasOpen(true)}
+            showCanvasEntry={!desktop}
+            onSupplement={(input) => {
+              lastAction.current = "supplement";
+              void session.actions.supplement(input);
+            }}
+            onSelectResearch={(choice: ResearchChoice) => {
+              lastAction.current = "resolveResearch";
+              void session.actions.resolveResearch(choice);
+            }}
+            onAccept={() => {
+              lastAction.current = "accept";
+              void session.actions.accept();
+            }}
+            onReject={() => {
+              lastAction.current = "reject";
+              void session.actions.reject();
+            }}
+            onCancel={() => {
+              lastAction.current = "cancel";
+              void session.actions.cancel();
+            }}
           />
-
-          {isDesktop ? (
-            <>
-              {mapCard}
-              {timelineCard}
-            </>
-          ) : (
-            <Tabs defaultValue="timeline" className="space-y-3">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="timeline">时间轴</TabsTrigger>
-                <TabsTrigger value="map">地图</TabsTrigger>
-              </TabsList>
-              <TabsContent value="timeline" className="mt-0">
-                {timelineCard}
-              </TabsContent>
-              <TabsContent value="map" className="mt-0">
-                {mapCard}
-              </TabsContent>
-            </Tabs>
-          )}
-          {!isDesktop && researchCard}
-        </section>
-
-        <aside className="order-3 space-y-4">
-          {isDesktop && researchCard}
-          <Card>
-            <CardHeader>
-              <CardTitle>预算</CardTitle>
-              <CardDescription>门票、餐饮、交通、住宿与总计。</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <BudgetPanel itinerary={itinerary} />
-              {trip.latest_version && (
-                <BudgetModeToggle
-                  tripID={trip.id}
-                  baseVersion={trip.latest_version.seq}
-                  constraints={constraints}
-                  lodgingMentioned={lodging.mentioned === true}
-                  hasLodging={hasLodging}
-                  includeLodging={includeLodging}
-                  onRunStarted={setOverrideRunID}
-                  onReplanned={() => void tripQuery.refetch()}
-                />
-              )}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>版本</CardTitle>
-              <CardDescription>方案历史与差异。</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <VersionPanel
-                tripID={trip.id}
-                currentVersion={trip.latest_version ?? null}
-                onRestored={() => void tripQuery.refetch()}
-              />
-            </CardContent>
-          </Card>
         </aside>
-      </main>
-      <footer className="border-t px-4 py-3 text-xs text-muted-foreground">
-        AI 生成，价格与时间为估算；出行前请核实开放时间与门票。
-      </footer>
+
+        {desktop && (
+          <main className="hidden min-h-0 flex-1 overflow-hidden px-4 py-3 lg:block">
+            <ResultShell
+              model={result}
+              view={resultView}
+              onViewChange={setResultView}
+              activeDay={activeDay}
+              onActiveDayChange={setActiveDay}
+              selection={selection}
+              onSelect={setSelection}
+              controls={moreControls}
+              actionError={actionError}
+              isDraft={canvas.model.isDraft}
+              versionSeq={canvas.model.versionSeq}
+              onAdjustDay={adjustDay}
+              mapAvailable={hasAMapKey()}
+            />
+          </main>
+        )}
+      </div>
+
+      {!desktop && (
+        <ResultSheet
+          open={canvasOpen}
+          onOpenChange={setCanvasOpen}
+          model={result}
+          view={resultView}
+          onViewChange={setResultView}
+          activeDay={activeDay}
+          onActiveDayChange={setActiveDay}
+          selection={selection}
+          onSelect={setSelection}
+          controls={moreControls}
+          actionError={actionError}
+          isDraft={canvas.model.isDraft}
+          versionSeq={canvas.model.versionSeq}
+          onAdjustDay={adjustDay}
+          mapAvailable={hasAMapKey()}
+        />
+      )}
     </div>
   );
 }
 
+function resolveComposerMode(
+  status: RunStatus,
+  view: RunView,
+  awaitingStage: string,
+  baseVersion: number,
+): ComposerMode {
+  if (status === "queued" || status === "running") return { kind: "running" };
+  if (status === "awaiting_user") {
+    if (view.researchQuestion) return { kind: "locked", reason: "research_choice" };
+    if (view.missing.length > 0) return { kind: "supplement", missing: view.missing };
+    return { kind: "revise", rejected: awaitingStage === "proposal_rejected" };
+  }
+  if (status === "completed") {
+    return baseVersion > 0
+      ? { kind: "adjust", baseVersion }
+      : { kind: "disabled", reason: "方案尚未保存，暂时无法调整。" };
+  }
+  if (status === "failed") {
+    return { kind: "disabled", reason: "本次规划失败，可返回首页重新创建。" };
+  }
+  if (status === "cancelled") {
+    return { kind: "disabled", reason: "本次规划已停止。" };
+  }
+  return { kind: "disabled", reason: "等待规划开始…" };
+}
+
+function lastAwaitingStage(events: RunEvent[]): string {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index].type === "run.awaiting_user") {
+      return asString(events[index].payload.stage);
+    }
+  }
+  return "";
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 function WorkspaceSkeleton() {
   return (
-    <div className="min-h-screen p-4">
-      <div className="mb-4 flex items-center gap-3">
-        <Skeleton className="h-9 w-9" />
-        <div className="space-y-1">
-          <Skeleton className="h-4 w-32" />
-          <Skeleton className="h-3 w-20" />
-        </div>
+    <div className="flex h-[calc(100dvh-3.5rem)] min-h-0 bg-paper">
+      <div className="w-full shrink-0 space-y-3 border-hairline p-4 lg:w-[360px] lg:border-r xl:w-[400px]">
+        <Skeleton className="h-6 w-32" />
+        <Skeleton className="h-3 w-20" />
+        <Skeleton className="mt-6 h-20 w-full" />
+        <Skeleton className="h-36 w-full" />
+        <Skeleton className="h-16 w-full" />
       </div>
-      <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)_320px]">
-        <Skeleton className="h-[480px]" />
-        <div className="space-y-4">
-          <Skeleton className="h-72" />
-          <Skeleton className="h-56" />
-        </div>
-        <div className="space-y-4">
-          <Skeleton className="h-48" />
-          <Skeleton className="h-40" />
-        </div>
+      <div className="hidden flex-1 space-y-3 p-4 lg:block">
+        <Skeleton className="h-14 w-full" />
+        <Skeleton className="h-[46vh] w-full" />
+        <Skeleton className="h-48 w-full" />
       </div>
-      <p className="mt-4 flex items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        正在加载行程…
-      </p>
+      <p className="sr-only">正在加载行程…</p>
     </div>
   );
 }

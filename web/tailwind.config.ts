@@ -11,6 +11,15 @@ const config: Config = {
     },
     extend: {
       colors: {
+        paper: "hsl(var(--paper))",
+        ink: "hsl(var(--ink))",
+        forest: "hsl(var(--forest))",
+        clay: "hsl(var(--clay))",
+        sand: "hsl(var(--sand))",
+        hairline: "hsl(var(--hairline))",
+        success: "hsl(var(--success))",
+        warning: "hsl(var(--warning))",
+        danger: "hsl(var(--danger))",
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
@@ -48,6 +57,8 @@ const config: Config = {
       },
       fontFamily: {
         sans: ["ui-sans-serif", "system-ui", "-apple-system", "PingFang SC", "Microsoft YaHei", "sans-serif"],
+        serif: ["Noto Serif SC", "Songti SC", "STSong", "Georgia", "serif"],
+        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
     },
   },

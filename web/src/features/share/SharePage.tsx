@@ -1,20 +1,24 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Check, Copy } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { ApiError } from "@/api/client";
 import { getSharedTrip } from "@/api/trips";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BudgetPanel } from "@/features/budget/BudgetPanel";
-import { parseItinerary } from "@/features/itinerary/types";
-import { ResearchPanel } from "@/features/research/ResearchPanel";
+import { SectionLabel } from "@/design/primitives";
+import { formatYuan } from "@/design/tokens";
+import { explanationMap, parseItinerary } from "@/features/itinerary/types";
 import { parseResearch } from "@/features/research/types";
-import { ItineraryTimeline } from "@/features/timeline/ItineraryTimeline";
+import { DossierView } from "@/features/result/DossierView";
+import {
+  buildResultModel,
+  type ResultSelection,
+} from "@/features/result/model";
 import { itineraryToPlainText } from "./plainText";
+import { hasAMapKey } from "@/lib/mapKey";
 
 function formatDate(value: string): string {
   const parsed = new Date(value);
@@ -31,6 +35,7 @@ export function SharePage() {
     retry: false,
   });
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [selection, setSelection] = useState<ResultSelection>(null);
 
   if (shareQuery.isPending) {
     return (
@@ -69,13 +74,11 @@ export function SharePage() {
   const shared = shareQuery.data;
   const itinerary = parseItinerary(shared.version.plan);
   const research = parseResearch(shared.version.research);
-  const poiNames: Record<string, string> = {};
-  for (const day of itinerary?.days ?? []) {
-    for (const block of day.blocks) {
-      if (block.type === "poi" && block.poi_id) poiNames[block.poi_id] = block.title;
-    }
-  }
-  const title = itinerary ? `${itinerary.city === "beijing" || !itinerary.city ? "北京" : itinerary.city} · ${itinerary.days.length} 天` : "分享的行程";
+  const result = buildResultModel({
+    itinerary,
+    explanations: explanationMap(itinerary),
+    research,
+  });
 
   async function handleCopy() {
     if (!itinerary) return;
@@ -88,89 +91,65 @@ export function SharePage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b bg-card/80 px-4 py-3 backdrop-blur">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild>
-            <Link to="/" aria-label="返回首页">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-          </Button>
-          <div>
-            <h1 className="text-base font-semibold">{title}</h1>
-            <p className="text-xs text-muted-foreground">TripPilot 分享的只读行程</p>
+    <div className="flex min-h-screen flex-col bg-paper">
+      <header className="border-b border-hairline">
+        <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center justify-between gap-3 px-4 py-4 lg:px-8">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+            <span className="font-serif text-base text-ink">TripPilot · 分享的行程</span>
+            <Badge variant="secondary">AI 生成</Badge>
+            <Badge variant="outline">只读</Badge>
+            {result && <span className="tabular-nums">总预算 {formatYuan(result.budget.total)}</span>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => void handleCopy()} disabled={!itinerary}>
+              {copyState === "copied" ? <Check className="mr-1 h-4 w-4" /> : <Copy className="mr-1 h-4 w-4" />}
+              {copyState === "copied" ? "已复制" : "复制行程文本"}
+            </Button>
+            <Button size="sm" asChild>
+              <Link to="/">我也来规划一版</Link>
+            </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Badge variant="secondary">AI 生成</Badge>
-          <Badge variant="outline">只读</Badge>
-        </div>
+        {copyState === "error" && (
+          <div className="mx-auto w-full max-w-4xl px-4 pb-4 lg:px-8">
+            <p role="alert" className="text-xs text-danger">
+              复制失败，请检查浏览器剪贴板权限。
+            </p>
+          </div>
+        )}
       </header>
 
-      <main className="mx-auto grid w-full max-w-6xl flex-1 gap-4 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="min-w-0">
-          <Card>
-            <CardHeader>
-              <CardTitle>行程时间轴</CardTitle>
-              <CardDescription>分享时保存的快照，不随原行程后续调整而变化。</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {itinerary ? (
-                <ItineraryTimeline itinerary={itinerary} />
-              ) : (
-                <p className="text-sm text-muted-foreground">行程数据不可用。</p>
-              )}
-            </CardContent>
-          </Card>
-        </section>
+      <main className="mx-auto w-full max-w-4xl flex-1 space-y-6 px-4 py-6 lg:px-8">
+        {result ? (
+          <DossierView
+            model={result}
+            activeDay={null}
+            selection={selection}
+            onSelect={setSelection}
+            readOnly
+            mapAvailable={hasAMapKey()}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">分享快照中没有可用的行程数据。</p>
+        )}
 
-        <aside className="space-y-4">
-          {research && (
-            <Card>
-              <CardHeader>
-                <CardTitle>研究与住宿</CardTitle>
-                <CardDescription>住宿建议与外部攻略摘要，仅供参考。</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResearchPanel research={research} poiNames={poiNames} />
-              </CardContent>
-            </Card>
-          )}
+        {!research && (
+          <p className="rounded-md border border-dashed border-hairline bg-paper/50 px-3 py-2 text-xs text-muted-foreground">
+            此分享快照未包含住宿与攻略摘要。
+          </p>
+        )}
 
-          <Card>
-            <CardHeader>
-              <CardTitle>预算</CardTitle>
-              <CardDescription>门票、餐饮、交通与总计。</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <BudgetPanel itinerary={itinerary} />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>来源</CardTitle>
-              <CardDescription>分享链接与版本快照。</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm text-muted-foreground">
-              <p>版本 v{shared.version.seq}</p>
-              <p>创建于 {formatDate(shared.created_at)}</p>
-              <p className="break-all">行程 {shared.trip_id}</p>
-              <Button size="sm" variant="outline" onClick={() => void handleCopy()} disabled={!itinerary}>
-                {copyState === "copied" ? <Check className="mr-1 h-4 w-4" /> : <Copy className="mr-1 h-4 w-4" />}
-                {copyState === "copied" ? "已复制" : "复制行程文本"}
-              </Button>
-              {copyState === "error" && (
-                <p role="alert" className="text-xs text-destructive">
-                  复制失败，请检查浏览器剪贴板权限。
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        </aside>
+        <div className="space-y-1.5 border-t border-hairline pt-4">
+          <SectionLabel>来源</SectionLabel>
+          <p className="font-mono text-sm tabular-nums text-ink">版本 v{shared.version.seq}</p>
+          <p className="text-xs text-muted-foreground">创建于 {formatDate(shared.created_at)}</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            分享时保存的快照，不随原行程后续调整而变化。
+          </p>
+        </div>
       </main>
 
-      <footer className="border-t px-4 py-3 text-xs text-muted-foreground">
+      <footer className="border-t border-hairline px-4 py-3 text-center text-xs text-muted-foreground lg:px-8">
         AI 生成，价格与时间为估算；出行前请核实开放时间与门票。
       </footer>
     </div>

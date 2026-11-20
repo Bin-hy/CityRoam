@@ -22,6 +22,7 @@ import (
 	"trippilot/internal/plugins"
 	"trippilot/internal/repo"
 	"trippilot/internal/runstore"
+	"trippilot/internal/skills"
 	"trippilot/internal/tools"
 	"trippilot/migrations"
 )
@@ -114,10 +115,11 @@ func run() error {
 	if cfg.AMapWebKey != "" {
 		amap = tools.NewAMapClient(cfg.AMapWebKey)
 	}
+	notes := make([]string, 0, 3)
 	nodeOptions := []agent.NodeOption{
 		agent.WithSnapshotSource(snapshot),
 		agent.WithPOILookup(snapshot),
-		agent.WithRouteProvider(tools.NewRouteService(amap, "beijing")),
+		agent.WithRouteProvider(tools.NewRouteService(amap, "北京")),
 		agent.WithNodeLogger(logger),
 	}
 	if amap != nil {
@@ -142,11 +144,24 @@ func run() error {
 				return fmt.Errorf("plugin eval requires %s: %s", status.Name, status.DisabledReason)
 			}
 		}
+		skillRegistry, err := skills.Load(cfg.SkillsDir)
+		if err != nil {
+			return fmt.Errorf("load skills: %w", err)
+		}
 		nodeOptions = append(nodeOptions,
 			agent.WithToolLLM(llm),
 			agent.WithResearchTools(wiring.Tools...),
 			agent.WithResearchLimits(cfg.ResearchTimeout, cfg.ResearchMaxToolCalls),
 			agent.WithResearchContext(plugins.WithRun),
+			agent.WithSkillRegistry(skillRegistry),
+		)
+		notes = append(notes,
+			fmt.Sprintf("技能：%d 个固定版本（目录 %s）", skillRegistry.Len(), cfg.SkillsDir),
+			fmt.Sprintf("插件开关：HOTEL_PLUGIN_ENABLED=%t，GUIDE_PLUGIN_ENABLED=%t", cfg.HotelPluginEnabled, cfg.GuidePluginEnabled),
+			fmt.Sprintf("酒店 sidecar：%s（healthz 通过）", cfg.HotelToolURL),
+			fmt.Sprintf("攻略搜索：%s", cfg.GuideSearchBaseURL),
+			fmt.Sprintf("研究时限：%s；研究工具调用上限：%d", cfg.ResearchTimeout, cfg.ResearchMaxToolCalls),
+			fmt.Sprintf("命令：go run ./cmd/eval -plugins -cases %s -output %s", *casesDir, *output),
 		)
 	}
 
@@ -164,6 +179,7 @@ func run() error {
 		eval.WithCaseTimeout(3*time.Minute),
 	)
 	report, runErr := batch.Run(ctx, cases)
+	report.Notes = append(report.Notes, notes...)
 	runner.Wait()
 
 	markdown := eval.Markdown(report)

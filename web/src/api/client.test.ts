@@ -22,6 +22,7 @@ describe("apiRequest", () => {
     expect(data).toEqual({ status: "ok" });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/meta");
+    expect(init.credentials).toBe("include");
     expect(new Headers(init.headers).get("X-Request-ID")).toMatch(/^[0-9a-z-]+$/);
   });
 

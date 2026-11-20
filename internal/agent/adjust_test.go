@@ -248,7 +248,7 @@ func TestAdjustment(t *testing.T) {
 		}
 	})
 
-	t.Run("scheduler changes to untouched days are rejected", func(t *testing.T) {
+	t.Run("untouched days keep the base plan even if the scheduler mutates them", func(t *testing.T) {
 		in, _ := adjustmentFixture(t)
 		baseScheduler := &draftScheduler{}
 		basePlan, err := baseScheduler.Build(in.BaseDraft, in.Constraints, in.POIs, nil, domain.ScheduleOptions{})
@@ -267,10 +267,12 @@ func TestAdjustment(t *testing.T) {
 			WithNodeLogger(discardLogger()),
 		)
 
-		_, err = nodes.Adjust(context.Background(), in)
-		var nodeErr *NodeError
-		if !errors.As(err, &nodeErr) || nodeErr.Code != "adjustment_scope_violation" {
-			t.Fatalf("err = %v", err)
+		out, err := nodes.Adjust(context.Background(), in)
+		if err != nil {
+			t.Fatalf("adjust: %v", err)
+		}
+		if !reflect.DeepEqual(basePlan.Days[1], out.Plan.Days[1]) {
+			t.Fatalf("untouched day changed:\nbefore %+v\nafter  %+v", basePlan.Days[1], out.Plan.Days[1])
 		}
 	})
 

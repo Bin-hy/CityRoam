@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"trippilot/internal/domain"
+	"trippilot/internal/skills"
 )
 
 const (
@@ -55,6 +56,9 @@ type TripState struct {
 	Snapshot         *VersionSnapshot         `json:"snapshot,omitempty"`
 	Research         *domain.ResearchBrief    `json:"research,omitempty"`
 	ResearchQuestion *domain.ResearchQuestion `json:"research_question,omitempty"`
+	Skills           []skills.Skill           `json:"skills,omitempty"`
+	SkillPins        []skills.CatalogEntry    `json:"skill_pins,omitempty"`
+	SkillsPinned     bool                     `json:"skills_pinned,omitempty"`
 	ResolvedHotel    *domain.Hotel            `json:"resolved_hotel,omitempty"`
 	ConstraintPatch  *domain.ConstraintSet    `json:"constraint_patch,omitempty"`
 	Proposal         *AdjustmentProposal      `json:"proposal,omitempty"`

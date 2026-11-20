@@ -1,13 +1,18 @@
 module trippilot
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/cloudwego/eino v0.9.23
+	github.com/coreos/go-oidc/v3 v3.20.0
+	github.com/go-chi/chi/v5 v5.2.3
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/jsonschema-go v0.4.2
 	github.com/jackc/pgx/v5 v5.7.4
 	github.com/modelcontextprotocol/go-sdk v1.3.1
 	github.com/pressly/goose/v3 v3.24.3
+	golang.org/x/oauth2 v0.36.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -19,7 +24,6 @@ require (
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/eino-contrib/jsonschema v1.0.3 // indirect
-	github.com/go-chi/chi/v5 v5.2.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/goph/emperror v0.17.2 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -47,9 +51,7 @@ require (
 	golang.org/x/arch v0.11.0 // indirect
 	golang.org/x/crypto v0.38.0 // indirect
 	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6 // indirect
-	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.14.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

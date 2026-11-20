@@ -73,6 +73,7 @@ type ValidateInput struct {
 	Constraints domain.ConstraintSet
 	Plan        domain.Itinerary
 	POIs        map[string]domain.POI
+	Research    *domain.ResearchBrief
 }
 
 type ValidateOutput struct {
@@ -84,6 +85,11 @@ type ValidateOutput struct {
 // Validate runs the deterministic C1-C12 checks and publishes the full list.
 func (n *Nodes) Validate(ctx context.Context, in ValidateInput) (ValidateOutput, error) {
 	violations := n.validator.Validate(in.Plan, in.Constraints, in.POIs, n.routes)
+	includesRain := in.Research != nil && len(in.Research.Weather) > 0
+	if includesRain {
+		violations = append(violations, validator.CheckRain(in.Plan, in.POIs, in.Research.Weather)...)
+		domain.Sort(violations)
+	}
 	counts := domain.CountByLevel(violations)
 
 	out := ValidateOutput{
@@ -95,6 +101,7 @@ func (n *Nodes) Validate(ctx context.Context, in ValidateInput) (ValidateOutput,
 		"blocking":   out.Blocking,
 		"warnings":   out.Warnings,
 		"violations": violations,
+		"checked":    validator.CheckedCount(includesRain),
 	}); err != nil {
 		return ValidateOutput{}, &NodeError{Code: "event_failed", Message: "发布校验事件失败", Err: err}
 	}

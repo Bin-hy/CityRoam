@@ -11,14 +11,16 @@ import (
 )
 
 type stubTool struct {
-	name      string
-	call      func(ctx context.Context, input json.RawMessage) (json.RawMessage, error)
-	cacheKey  string
-	cacheTTL  time.Duration
-	evidence  []EvidenceRecord
-	provider  string
-	callCount int
-	mu        sync.Mutex
+	name          string
+	call          func(ctx context.Context, input json.RawMessage) (json.RawMessage, error)
+	cacheKey      string
+	cacheTTL      time.Duration
+	evidence      []EvidenceRecord
+	provider      string
+	querySummary  string
+	resultPreview []EventPreview
+	callCount     int
+	mu            sync.Mutex
 }
 
 func (t *stubTool) Name() string {
@@ -76,6 +78,14 @@ func (t *stubTool) ResultCount(output json.RawMessage) int {
 
 func (t *stubTool) Provider() string {
 	return t.provider
+}
+
+func (t *stubTool) QuerySummary(input json.RawMessage) string {
+	return t.querySummary
+}
+
+func (t *stubTool) ResultPreview(output json.RawMessage) []EventPreview {
+	return t.resultPreview
 }
 
 type stubPlugin struct {

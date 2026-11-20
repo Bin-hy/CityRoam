@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { CreatedTrip } from "@/api/types";
@@ -11,6 +11,11 @@ const created: CreatedTrip = {
   events_url: "/api/runs/run-1/events",
 };
 
+async function openPreferences() {
+  await userEvent.click(screen.getByRole("button", { name: /^偏好/ }));
+  return screen.findByRole("dialog");
+}
+
 describe("CreateForm", () => {
   it("submits the composed input with an idempotency key", async () => {
     const onSubmit = vi.fn().mockResolvedValue(created);
@@ -18,8 +23,11 @@ describe("CreateForm", () => {
     render(<CreateForm onSubmit={onSubmit} onCreated={onCreated} />);
 
     await userEvent.type(screen.getByLabelText("行程需求"), "北京两天，想看历史");
-    await userEvent.click(screen.getByRole("button", { name: /高级选项/ }));
-    await userEvent.selectOptions(screen.getByLabelText("天数"), "2");
+    const dialog = await openPreferences();
+    await userEvent.selectOptions(within(dialog).getByLabelText("天数"), "2");
+    await userEvent.click(within(dialog).getByRole("button", { name: "完成" }));
+    expect(screen.getByRole("button", { name: /偏好 · 1 项/ })).toBeInTheDocument();
+
     await userEvent.click(screen.getByRole("button", { name: "开始规划" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -31,7 +39,7 @@ describe("CreateForm", () => {
     expect(onCreated).toHaveBeenCalledWith(created);
   });
 
-  it("reuses the request key when retrying without edits", async () => {
+  it("reuses the request key and keeps the input when retrying without edits", async () => {
     const onSubmit = vi
       .fn()
       .mockRejectedValueOnce(new Error("network"))
@@ -42,6 +50,9 @@ describe("CreateForm", () => {
     const submit = screen.getByRole("button", { name: "开始规划" });
     await userEvent.click(submit);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("alert")).toHaveTextContent("提交失败");
+    expect(screen.getByLabelText("行程需求")).toHaveValue("北京一天");
+
     await userEvent.click(submit);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
 
@@ -54,6 +65,38 @@ describe("CreateForm", () => {
     await userEvent.click(screen.getByRole("button", { name: /带爸妈/ }));
 
     expect((screen.getByLabelText("行程需求") as HTMLTextAreaElement).value).toContain("带爸妈");
+  });
+
+  it("appends preferences edited in the dialog", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(created);
+    render(<CreateForm onSubmit={onSubmit} />);
+
+    await userEvent.type(screen.getByLabelText("行程需求"), "北京两天");
+    const dialog = await openPreferences();
+    await userEvent.type(within(dialog).getByLabelText("总预算"), "1000");
+    await userEvent.selectOptions(within(dialog).getByLabelText("节奏"), "relaxed");
+    await userEvent.click(within(dialog).getByLabelText("安排午餐和晚餐"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "完成" }));
+    await userEvent.click(screen.getByRole("button", { name: "开始规划" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const input = onSubmit.mock.calls[0][0].input as string;
+    expect(input).toContain("节奏轻松");
+    expect(input).toContain("总预算 1000 元");
+    expect(input).toContain("需要安排午餐和晚餐");
+  });
+
+  it("keeps preferences when closing and resets them on clear", async () => {
+    render(<CreateForm onSubmit={vi.fn().mockResolvedValue(created)} />);
+
+    let dialog = await openPreferences();
+    await userEvent.selectOptions(within(dialog).getByLabelText("天数"), "3");
+    await userEvent.click(within(dialog).getByRole("button", { name: "完成" }));
+
+    dialog = await openPreferences();
+    expect(within(dialog).getByLabelText("天数")).toHaveValue("3");
+    await userEvent.click(within(dialog).getByRole("button", { name: "清空偏好" }));
+    expect(within(dialog).getByLabelText("天数")).toHaveValue("");
   });
 
   it("rejects an empty request", async () => {

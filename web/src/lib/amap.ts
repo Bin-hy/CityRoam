@@ -1,28 +1,30 @@
 import { load } from "@amap/amap-jsapi-loader";
+import { AMAP_KEY, hasAMapKey } from "./mapKey";
 
-export const AMAP_KEY = ((import.meta.env.VITE_AMAP_JS_KEY as string | undefined) ?? "").trim();
 export const AMAP_SECURITY_CODE = ((import.meta.env.VITE_AMAP_SECURITY_CODE as string | undefined) ?? "").trim();
 
-export function hasAMapKey(): boolean {
-  return AMAP_KEY.length > 0;
-}
+export { AMAP_KEY, hasAMapKey };
 
 export interface AMapMapInstance {
   destroy(): void;
   remove(overlays: unknown | unknown[]): void;
   setFitView(overlays?: unknown[]): void;
   setZoomAndCenter(zoom: number, center: [number, number]): void;
+  resize(): void;
 }
 
 export interface AMapMarkerInstance {
   on(event: "click", handler: () => void): void;
   getPosition(): [number, number];
   setzIndex(index: number): void;
+  setContent(content: string): void;
   setMap(map: AMapMapInstance | null): void;
 }
 
 export interface AMapPolylineInstance {
   setMap(map: AMapMapInstance | null): void;
+  setOptions?(options: Record<string, unknown>): void;
+  on?(event: "click", handler: () => void): void;
 }
 
 export interface AMapInfoWindowInstance {

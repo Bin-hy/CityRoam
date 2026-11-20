@@ -26,6 +26,7 @@ type RepairInput struct {
 	Candidates  []domain.POI
 	Violations  []domain.Violation
 	Round       int
+	Research    *domain.ResearchBrief
 }
 
 type RepairOutput struct {
@@ -135,12 +136,13 @@ func (n *Nodes) Repair(ctx context.Context, in RepairInput) (RepairOutput, error
 
 	merged := in.Draft
 	merged.Days[target] = domain.DraftDay{Date: merged.Days[target].Date, Items: patch.Items}
-	plan, err := n.scheduler.Build(merged, in.Constraints, in.POIs, n.routes, domain.ScheduleOptions{})
+	options := scheduleOptions(in.Research)
+	plan, err := n.scheduler.Build(merged, in.Constraints, in.POIs, n.routes, options)
 	if err != nil {
 		return RepairOutput{}, &NodeError{Code: "schedule_failed", Message: "修复后重新排期失败", Err: err}
 	}
 	violations := n.validator.Validate(plan, in.Constraints, in.POIs, n.routes)
-	merged, plan, violations = n.fitDailyHours(merged, plan, violations, in.Constraints, in.POIs)
+	merged, plan, violations = n.fitDailyHours(merged, plan, violations, in.Constraints, in.POIs, options)
 	counts := domain.CountByLevel(violations)
 
 	if err := n.events.Publish(ctx, in.RunID, "repair.completed", map[string]any{
@@ -227,6 +229,7 @@ func (n *Nodes) fitDailyHours(
 	violations []domain.Violation,
 	constraints domain.ConstraintSet,
 	pois map[string]domain.POI,
+	options domain.ScheduleOptions,
 ) (domain.DraftPlan, domain.Itinerary, []domain.Violation) {
 	maxMinutes := constraints.ApplyDefaults().Daily.MaxHours * 60
 	if maxMinutes <= 0 {
@@ -268,7 +271,7 @@ func (n *Nodes) fitDailyHours(
 		if !trimmed {
 			break
 		}
-		built, err := n.scheduler.Build(draft, constraints, pois, n.routes, domain.ScheduleOptions{})
+		built, err := n.scheduler.Build(draft, constraints, pois, n.routes, options)
 		if err != nil {
 			break
 		}

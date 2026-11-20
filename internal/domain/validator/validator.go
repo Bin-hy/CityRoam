@@ -2,6 +2,17 @@ package validator
 
 import "trippilot/internal/domain"
 
+// BaseRuleCount is the number of deterministic checks C1-C12.
+const BaseRuleCount = 12
+
+// CheckedCount reports how many rules ran, including the optional rain check.
+func CheckedCount(includesRain bool) int {
+	if includesRain {
+		return BaseRuleCount + 1
+	}
+	return BaseRuleCount
+}
+
 // Validate runs deterministic checks and returns violations in stable order.
 func Validate(
 	plan domain.Itinerary,
