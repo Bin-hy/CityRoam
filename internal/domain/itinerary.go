@@ -53,9 +53,21 @@ func (d DraftPlan) POIIDs() []string {
 }
 
 type Itinerary struct {
-	City   string    `json:"city"`
-	Days   []DayPlan `json:"days"`
-	Totals Totals    `json:"totals"`
+	City    string          `json:"city"`
+	Days    []DayPlan       `json:"days"`
+	Lodging *LodgingSummary `json:"lodging,omitempty"`
+	Totals  Totals          `json:"totals"`
+}
+
+type LodgingSummary struct {
+	Hotel           Hotel  `json:"hotel"`
+	Nights          int    `json:"nights"`
+	NightlyYuan     int    `json:"nightly_yuan"`
+	TotalYuan       int    `json:"total_yuan"`
+	AnchorDays      []int  `json:"anchor_days,omitempty"`
+	IncludeInBudget bool   `json:"include_in_budget"`
+	PriceEstimated  bool   `json:"price_estimated"`
+	Source          string `json:"source"`
 }
 
 type DayPlan struct {
@@ -92,9 +104,10 @@ type Transport struct {
 }
 
 type Totals struct {
-	CostYuan  int     `json:"cost_yuan"`
-	POICount  int     `json:"poi_count"`
-	WalkingKM float64 `json:"walking_km"`
+	CostYuan    int     `json:"cost_yuan"`
+	POICount    int     `json:"poi_count"`
+	WalkingKM   float64 `json:"walking_km"`
+	LodgingYuan int     `json:"lodging_yuan"`
 }
 
 func (i Itinerary) DayByIndex(index int) (DayPlan, bool) {
@@ -106,6 +119,15 @@ func (i Itinerary) DayByIndex(index int) (DayPlan, bool) {
 
 func (i Itinerary) Clone() Itinerary {
 	out := i
+	if i.Lodging != nil {
+		lodging := *i.Lodging
+		lodging.AnchorDays = append([]int(nil), i.Lodging.AnchorDays...)
+		if i.Lodging.Hotel.Score != nil {
+			score := *i.Lodging.Hotel.Score
+			lodging.Hotel.Score = &score
+		}
+		out.Lodging = &lodging
+	}
 	out.Days = append([]DayPlan(nil), i.Days...)
 	for dayIndex := range out.Days {
 		out.Days[dayIndex].Blocks = append([]Block(nil), i.Days[dayIndex].Blocks...)

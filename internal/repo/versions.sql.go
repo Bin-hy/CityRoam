@@ -26,9 +26,9 @@ func (q *Queries) AcceptPlanVersionBySeq(ctx context.Context, arg AcceptPlanVers
 }
 
 const createPlanVersion = `-- name: CreatePlanVersion :one
-INSERT INTO plan_versions (trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status, created_at
+INSERT INTO plan_versions (trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status, research)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status, created_at, research
 `
 
 type CreatePlanVersionParams struct {
@@ -41,6 +41,7 @@ type CreatePlanVersionParams struct {
 	DiffSummary json.RawMessage `json:"diff_summary"`
 	Reason      *string         `json:"reason"`
 	Status      string          `json:"status"`
+	Research    json.RawMessage `json:"research"`
 }
 
 func (q *Queries) CreatePlanVersion(ctx context.Context, arg CreatePlanVersionParams) (PlanVersion, error) {
@@ -54,6 +55,7 @@ func (q *Queries) CreatePlanVersion(ctx context.Context, arg CreatePlanVersionPa
 		arg.DiffSummary,
 		arg.Reason,
 		arg.Status,
+		arg.Research,
 	)
 	var i PlanVersion
 	err := row.Scan(
@@ -68,12 +70,13 @@ func (q *Queries) CreatePlanVersion(ctx context.Context, arg CreatePlanVersionPa
 		&i.Reason,
 		&i.Status,
 		&i.CreatedAt,
+		&i.Research,
 	)
 	return i, err
 }
 
 const getPlanVersion = `-- name: GetPlanVersion :one
-SELECT id, trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status, created_at FROM plan_versions WHERE id = $1
+SELECT id, trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status, created_at, research FROM plan_versions WHERE id = $1
 `
 
 func (q *Queries) GetPlanVersion(ctx context.Context, id string) (PlanVersion, error) {
@@ -91,12 +94,13 @@ func (q *Queries) GetPlanVersion(ctx context.Context, id string) (PlanVersion, e
 		&i.Reason,
 		&i.Status,
 		&i.CreatedAt,
+		&i.Research,
 	)
 	return i, err
 }
 
 const getPlanVersionBySeq = `-- name: GetPlanVersionBySeq :one
-SELECT id, trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status, created_at FROM plan_versions WHERE trip_id = $1 AND seq = $2
+SELECT id, trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status, created_at, research FROM plan_versions WHERE trip_id = $1 AND seq = $2
 `
 
 type GetPlanVersionBySeqParams struct {
@@ -119,12 +123,13 @@ func (q *Queries) GetPlanVersionBySeq(ctx context.Context, arg GetPlanVersionByS
 		&i.Reason,
 		&i.Status,
 		&i.CreatedAt,
+		&i.Research,
 	)
 	return i, err
 }
 
 const listPlanVersions = `-- name: ListPlanVersions :many
-SELECT id, trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status, created_at FROM plan_versions
+SELECT id, trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status, created_at, research FROM plan_versions
 WHERE trip_id = $1
 ORDER BY seq DESC
 `
@@ -150,6 +155,7 @@ func (q *Queries) ListPlanVersions(ctx context.Context, tripID string) ([]PlanVe
 			&i.Reason,
 			&i.Status,
 			&i.CreatedAt,
+			&i.Research,
 		); err != nil {
 			return nil, err
 		}

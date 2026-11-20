@@ -1,6 +1,11 @@
 package domain
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+func boolPtr(value bool) *bool { return &value }
 
 func TestConstraintDefaults(t *testing.T) {
 	got := ConstraintSet{}.ApplyDefaults()
@@ -120,6 +125,77 @@ func TestConstraintMerge(t *testing.T) {
 	base.Interests[0] = "mutated"
 	if got.Interests[0] != "coffee" {
 		t.Fatalf("merge aliased base Interests: %v", got.Interests)
+	}
+}
+
+func TestConstraintLodgingTriState(t *testing.T) {
+	tests := []struct {
+		name string
+		c    ConstraintSet
+		want bool
+	}{
+		{name: "unset defaults to included", c: ConstraintSet{}, want: true},
+		{name: "explicit false", c: ConstraintSet{Budget: BudgetConstraint{IncludeLodging: boolPtr(false)}}, want: false},
+		{name: "explicit true", c: ConstraintSet{Budget: BudgetConstraint{IncludeLodging: boolPtr(true)}}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.c.LodgingIncluded(); got != tt.want {
+				t.Fatalf("LodgingIncluded() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConstraintLodgingMerge(t *testing.T) {
+	base := ConstraintSet{
+		Budget: BudgetConstraint{IncludeLodging: boolPtr(false)},
+		Lodging: LodgingConstraint{
+			Mentioned:            true,
+			Hotels:               []string{"全季"},
+			Area:                 "王府井",
+			MaxPricePerNightYuan: 600,
+		},
+	}
+	got := Merge(base, ConstraintSet{})
+	if got.Budget.IncludeLodging != nil && *got.Budget.IncludeLodging {
+		t.Fatalf("nil patch include_lodging overwrote base false: %+v", got.Budget)
+	}
+	if !got.Lodging.Mentioned || len(got.Lodging.Hotels) != 1 || got.Lodging.Area != "王府井" || got.Lodging.MaxPricePerNightYuan != 600 {
+		t.Fatalf("empty patch overwrote lodging: %+v", got.Lodging)
+	}
+
+	got = Merge(base, ConstraintSet{
+		Budget:  BudgetConstraint{IncludeLodging: boolPtr(true)},
+		Lodging: LodgingConstraint{Hotels: []string{"万豪"}, Area: "国贸", MaxPricePerNightYuan: 900},
+	})
+	if got.Budget.IncludeLodging == nil || !*got.Budget.IncludeLodging {
+		t.Fatalf("explicit true did not override: %+v", got.Budget)
+	}
+	if len(got.Lodging.Hotels) != 1 || got.Lodging.Hotels[0] != "万豪" || got.Lodging.Area != "国贸" || got.Lodging.MaxPricePerNightYuan != 900 {
+		t.Fatalf("lodging merge = %+v", got.Lodging)
+	}
+	base.Lodging.Hotels[0] = "mutated"
+	if got.Lodging.Hotels[0] != "万豪" {
+		t.Fatalf("merge aliased base hotels: %v", got.Lodging.Hotels)
+	}
+
+	got = Merge(base, ConstraintSet{Budget: BudgetConstraint{IncludeLodging: boolPtr(false)}})
+	if got.Budget.IncludeLodging == nil || *got.Budget.IncludeLodging {
+		t.Fatalf("explicit false did not override: %+v", got.Budget)
+	}
+}
+
+func TestConstraintLodgingJSONCompatibility(t *testing.T) {
+	var got ConstraintSet
+	if err := json.Unmarshal([]byte(`{"city":"beijing","days":2}`), &got); err != nil {
+		t.Fatalf("unmarshal old constraints: %v", err)
+	}
+	if got.Lodging.Mentioned || got.Budget.IncludeLodging != nil {
+		t.Fatalf("old JSON produced lodging state: %+v", got)
+	}
+	if !got.LodgingIncluded() {
+		t.Fatal("old JSON should default to lodging included")
 	}
 }
 

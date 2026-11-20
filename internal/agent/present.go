@@ -14,15 +14,16 @@ const StatusAwaitingUser = "awaiting_user"
 
 // VersionSnapshot is the immutable record behind one plan version.
 type VersionSnapshot struct {
-	Seq          int                  `json:"seq"`
-	Plan         domain.Itinerary     `json:"plan"`
-	Constraints  domain.ConstraintSet `json:"constraints"`
-	Violations   []domain.Violation   `json:"violations"`
-	Reason       string               `json:"reason,omitempty"`
-	Explanations []domain.Explanation `json:"explanations"`
-	Diff         diff.Result          `json:"diff"`
-	Suggestions  []string             `json:"suggestions,omitempty"`
-	CreatedAt    time.Time            `json:"created_at"`
+	Seq          int                   `json:"seq"`
+	Plan         domain.Itinerary      `json:"plan"`
+	Constraints  domain.ConstraintSet  `json:"constraints"`
+	Violations   []domain.Violation    `json:"violations"`
+	Reason       string                `json:"reason,omitempty"`
+	Explanations []domain.Explanation  `json:"explanations"`
+	Diff         diff.Result           `json:"diff"`
+	Suggestions  []string              `json:"suggestions,omitempty"`
+	Research     *domain.ResearchBrief `json:"research,omitempty"`
+	CreatedAt    time.Time             `json:"created_at"`
 }
 
 type PresentInput struct {

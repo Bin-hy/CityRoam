@@ -13,6 +13,7 @@ type ConstraintSet struct {
 	StartDate string            `json:"start_date,omitempty"`
 	PartySize int               `json:"party_size"`
 	Budget    BudgetConstraint  `json:"budget"`
+	Lodging   LodgingConstraint `json:"lodging"`
 	Daily     DailyConstraint   `json:"daily"`
 	Meals     MealConstraint    `json:"meals"`
 	Pace      Pace              `json:"pace"`
@@ -27,8 +28,25 @@ type ConstraintSet struct {
 }
 
 type BudgetConstraint struct {
-	TotalYuan int  `json:"total_yuan"`
-	Hard      bool `json:"hard"`
+	TotalYuan      int   `json:"total_yuan"`
+	Hard           bool  `json:"hard"`
+	IncludeLodging *bool `json:"include_lodging,omitempty"`
+}
+
+type LodgingConstraint struct {
+	Mentioned            bool     `json:"mentioned"`
+	Hotels               []string `json:"hotels,omitempty"`
+	Area                 string   `json:"area,omitempty"`
+	MaxPricePerNightYuan int      `json:"max_price_per_night_yuan,omitempty"`
+}
+
+// LodgingIncluded reports whether lodging belongs in the budget. A nil
+// pointer means the user did not specify, so the product default applies.
+func (c ConstraintSet) LodgingIncluded() bool {
+	if c.Budget.IncludeLodging == nil {
+		return true
+	}
+	return *c.Budget.IncludeLodging
 }
 
 type DailyConstraint struct {
@@ -128,6 +146,22 @@ func Merge(base, patch ConstraintSet) ConstraintSet {
 	}
 	if patch.Budget.Hard {
 		out.Budget.Hard = true
+	}
+	if patch.Budget.IncludeLodging != nil {
+		value := *patch.Budget.IncludeLodging
+		out.Budget.IncludeLodging = &value
+	}
+	if patch.Lodging.Mentioned {
+		out.Lodging.Mentioned = true
+	}
+	if patch.Lodging.Hotels != nil {
+		out.Lodging.Hotels = cloneStrings(patch.Lodging.Hotels)
+	}
+	if patch.Lodging.Area != "" {
+		out.Lodging.Area = patch.Lodging.Area
+	}
+	if patch.Lodging.MaxPricePerNightYuan > 0 {
+		out.Lodging.MaxPricePerNightYuan = patch.Lodging.MaxPricePerNightYuan
 	}
 	if patch.Daily.MaxHours != 0 {
 		out.Daily.MaxHours = patch.Daily.MaxHours

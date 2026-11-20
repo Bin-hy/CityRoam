@@ -103,3 +103,44 @@ func TestItineraryClone(t *testing.T) {
 		t.Fatalf("empty clone Days = %v, want nil", emptyClone.Days)
 	}
 }
+
+func TestItineraryLodging(t *testing.T) {
+	score := 4.8
+	original := Itinerary{
+		City: "beijing",
+		Lodging: &LodgingSummary{
+			Hotel:          Hotel{Name: "全季", Score: &score},
+			Nights:         2,
+			NightlyYuan:    500,
+			TotalYuan:      1000,
+			AnchorDays:     []int{0, 2},
+			Source:         "user_selected",
+			PriceEstimated: true,
+		},
+		Totals: Totals{CostYuan: 1500, LodgingYuan: 1000},
+	}
+
+	clone := original.Clone()
+	clone.Lodging.Hotel.Name = "万豪"
+	clone.Lodging.AnchorDays[0] = 1
+	*clone.Lodging.Hotel.Score = 4.0
+	clone.Totals.LodgingYuan = 0
+
+	if original.Lodging.Hotel.Name != "全季" || original.Lodging.AnchorDays[0] != 0 {
+		t.Fatalf("clone mutated lodging: %+v", original.Lodging)
+	}
+	if *original.Lodging.Hotel.Score != 4.8 {
+		t.Fatalf("clone aliased hotel score: %v", *original.Lodging.Hotel.Score)
+	}
+	if original.Totals.LodgingYuan != 1000 {
+		t.Fatalf("clone mutated totals: %+v", original.Totals)
+	}
+
+	empty := Itinerary{}
+	if empty.Lodging != nil {
+		t.Fatal("zero itinerary has lodging")
+	}
+	if (Itinerary{}).Clone().Lodging != nil {
+		t.Fatal("empty clone has lodging")
+	}
+}

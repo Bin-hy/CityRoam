@@ -144,6 +144,7 @@ func (s *Store) RestorePlanVersion(ctx context.Context, arg RestorePlanVersionPa
 		DiffSummary: arg.DiffSummary,
 		Reason:      arg.Reason,
 		Status:      "accepted",
+		Research:    source.Research,
 	})
 	if err != nil {
 		return PlanVersion{}, fmt.Errorf("store: create restored version: %w", err)
@@ -172,6 +173,9 @@ func (s *Store) SaveVersion(ctx context.Context, arg CreatePlanVersionParams) (P
 		return PlanVersion{}, fmt.Errorf("store: next version seq: %w", err)
 	}
 	arg.Seq = seq
+	if len(arg.Research) == 0 {
+		arg.Research = json.RawMessage(`{}`)
+	}
 	version, err := q.CreatePlanVersion(ctx, arg)
 	if err != nil {
 		return PlanVersion{}, fmt.Errorf("store: create version: %w", err)

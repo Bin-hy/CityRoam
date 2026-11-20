@@ -22,15 +22,6 @@ func (q *Queries) CountPOIs(ctx context.Context, city string) (int64, error) {
 	return count, err
 }
 
-const deleteExpiredPluginCache = `-- name: DeleteExpiredPluginCache :exec
-DELETE FROM plugin_cache WHERE expires_at <= $1
-`
-
-func (q *Queries) DeleteExpiredPluginCache(ctx context.Context, expiresAt time.Time) error {
-	_, err := q.db.Exec(ctx, deleteExpiredPluginCache, expiresAt)
-	return err
-}
-
 const getPOI = `-- name: GetPOI :one
 SELECT id, city, name, category, area, address, lat, lng, coord_system, open_hours, ticket_yuan, suggested_minutes, rating, outdoor, tags, source, source_version, verified_at, fetched_at FROM poi_cache WHERE id = $1
 `
@@ -58,29 +49,6 @@ func (q *Queries) GetPOI(ctx context.Context, id string) (PoiCache, error) {
 		&i.SourceVersion,
 		&i.VerifiedAt,
 		&i.FetchedAt,
-	)
-	return i, err
-}
-
-const getPluginCache = `-- name: GetPluginCache :one
-SELECT key, provider, value, expires_at, created_at FROM plugin_cache
-WHERE key = $1 AND expires_at > $2
-`
-
-type GetPluginCacheParams struct {
-	Key       string    `json:"key"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
-
-func (q *Queries) GetPluginCache(ctx context.Context, arg GetPluginCacheParams) (PluginCache, error) {
-	row := q.db.QueryRow(ctx, getPluginCache, arg.Key, arg.ExpiresAt)
-	var i PluginCache
-	err := row.Scan(
-		&i.Key,
-		&i.Provider,
-		&i.Value,
-		&i.ExpiresAt,
-		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -254,32 +222,6 @@ func (q *Queries) UpsertPOI(ctx context.Context, arg UpsertPOIParams) error {
 		arg.Source,
 		arg.SourceVersion,
 		arg.VerifiedAt,
-	)
-	return err
-}
-
-const upsertPluginCache = `-- name: UpsertPluginCache :exec
-INSERT INTO plugin_cache (key, provider, value, expires_at)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (key) DO UPDATE SET
-  provider = EXCLUDED.provider,
-  value = EXCLUDED.value,
-  expires_at = EXCLUDED.expires_at
-`
-
-type UpsertPluginCacheParams struct {
-	Key       string          `json:"key"`
-	Provider  string          `json:"provider"`
-	Value     json.RawMessage `json:"value"`
-	ExpiresAt time.Time       `json:"expires_at"`
-}
-
-func (q *Queries) UpsertPluginCache(ctx context.Context, arg UpsertPluginCacheParams) error {
-	_, err := q.db.Exec(ctx, upsertPluginCache,
-		arg.Key,
-		arg.Provider,
-		arg.Value,
-		arg.ExpiresAt,
 	)
 	return err
 }

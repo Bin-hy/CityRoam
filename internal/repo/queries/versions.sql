@@ -2,8 +2,8 @@
 SELECT COALESCE(MAX(seq), 0) + 1 FROM plan_versions WHERE trip_id = $1;
 
 -- name: CreatePlanVersion :one
-INSERT INTO plan_versions (trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO plan_versions (trip_id, run_id, seq, plan, constraints, violations, diff_summary, reason, status, research)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING *;
 
 -- name: GetPlanVersion :one

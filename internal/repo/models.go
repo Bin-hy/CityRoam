@@ -52,6 +52,7 @@ type PlanVersion struct {
 	Reason      *string         `json:"reason"`
 	Status      string          `json:"status"`
 	CreatedAt   time.Time       `json:"created_at"`
+	Research    json.RawMessage `json:"research"`
 }
 
 type PluginCache struct {

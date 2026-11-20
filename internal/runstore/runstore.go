@@ -134,6 +134,14 @@ func (s *Store) SaveVersion(ctx context.Context, runID string, snapshot agent.Ve
 	if err != nil {
 		return fmt.Errorf("runstore: encode diff: %w", err)
 	}
+	research := json.RawMessage(`{}`)
+	if snapshot.Research != nil {
+		encoded, err := json.Marshal(snapshot.Research)
+		if err != nil {
+			return fmt.Errorf("runstore: encode research: %w", err)
+		}
+		research = encoded
+	}
 	var reason *string
 	if snapshot.Reason != "" {
 		value := snapshot.Reason
@@ -149,6 +157,7 @@ func (s *Store) SaveVersion(ctx context.Context, runID string, snapshot agent.Ve
 		DiffSummary: diffSummary,
 		Reason:      reason,
 		Status:      status,
+		Research:    research,
 	})
 	if err != nil {
 		return fmt.Errorf("runstore: save version: %w", err)
