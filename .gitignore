@@ -8,3 +8,6 @@ bin/
 coverage.out
 web/node_modules/
 web/dist/
+
+*.local
+*.local.*
