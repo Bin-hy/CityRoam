@@ -124,3 +124,15 @@ func TestSummarizeComputesP95(t *testing.T) {
 		t.Fatalf("rates = %+v", summary)
 	}
 }
+
+func TestSummarizeP95UsesThreeDayCases(t *testing.T) {
+	results := []RunResult{
+		{Days: 3, Metrics: RunMetrics{LatencyMS: 1000}},
+		{Days: 3, Metrics: RunMetrics{LatencyMS: 3000}},
+		{Days: 1, Metrics: RunMetrics{LatencyMS: 9000}},
+	}
+	summary := Summarize(results)
+	if summary.P95LatencyMS != 3000 {
+		t.Fatalf("p95 = %d, want 3000 from 3-day cases", summary.P95LatencyMS)
+	}
+}

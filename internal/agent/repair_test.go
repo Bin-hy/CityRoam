@@ -94,7 +94,7 @@ func TestRepairNode(t *testing.T) {
 			t.Fatalf("calls = %d", len(llm.calls))
 		}
 		prompt := llm.calls[0].prompt
-		if !strings.Contains(prompt, `"open_status":"open"`) {
+		if !strings.Contains(prompt, `"open_status":"open `) {
 			t.Fatalf("prompt missing open status:\n%s", prompt)
 		}
 		if strings.Contains(prompt, "park-1") {

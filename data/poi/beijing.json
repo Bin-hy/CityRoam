@@ -495,6 +495,7 @@
     "id": "science-museum",
     "city": "beijing",
     "name": "中国科学技术馆",
+    "aliases": ["科技馆", "中国科技馆"],
     "category": "博物馆",
     "area": "朝阳",
     "address": "北辰东路5号",

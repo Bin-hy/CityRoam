@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
+	"time"
 
 	"trippilot/internal/domain"
 )
@@ -41,6 +43,7 @@ func (s *Scheduler) Build(
 		previousPOI := domain.POI{}
 		hasPrevious := false
 		blockSeq := 0
+		visitDate, dateErr := time.Parse("2006-01-02", draftDay.Date)
 		nextBlockID := func() string {
 			blockSeq++
 			return fmt.Sprintf("d%d-b%d", dayIndex+1, blockSeq)
@@ -98,6 +101,21 @@ func (s *Scheduler) Build(
 					Notes:       "早到，等待开始时间",
 				})
 				startAt = hint
+			}
+
+			// Waiting for opening keeps early arrivals from becoming C1
+			// violations that repair cannot fix by swapping POIs.
+			if openAt, ok := nextOpening(poi, visitDate, dateErr, startAt); ok {
+				blocks = append(blocks, domain.Block{
+					ID:          nextBlockID(),
+					Type:        domain.BlockTypeRest,
+					Title:       "等待至 " + domain.FormatClock(openAt),
+					Start:       domain.FormatClock(startAt),
+					End:         domain.FormatClock(openAt),
+					DurationMin: openAt - startAt,
+					Notes:       "早于营业时间，等待开门",
+				})
+				startAt = openAt
 			}
 
 			duration, err := itemDuration(item, poi)
@@ -196,6 +214,37 @@ func chooseMode(from, to domain.POI) string {
 		return domain.TransportWalk
 	}
 	return domain.TransportTransit
+}
+
+// nextOpening returns the next opening minute when arrival is before the
+// POI opens on the visit date. Arrivals inside a range or after the last
+// closing time are left to the validator.
+func nextOpening(poi domain.POI, visitDate time.Time, dateErr error, at int) (int, bool) {
+	if dateErr != nil || len(poi.OpenHours) == 0 {
+		return 0, false
+	}
+	weekday := int(visitDate.Weekday())
+	next := -1
+	for _, r := range poi.OpenHours {
+		start, startErr := domain.ParseClock(r.Start)
+		end, endErr := domain.ParseClock(r.End)
+		if startErr != nil || endErr != nil || end <= start {
+			continue
+		}
+		if !slices.Contains(r.Days, weekday) {
+			continue
+		}
+		if at >= start && at < end {
+			return 0, false
+		}
+		if start > at && (next == -1 || start < next) {
+			next = start
+		}
+	}
+	if next == -1 {
+		return 0, false
+	}
+	return next, true
 }
 
 func distanceMeters(a, b domain.POI) float64 {

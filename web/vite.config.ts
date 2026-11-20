@@ -2,16 +2,20 @@ import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
+const apiTarget = process.env.API_PROXY_TARGET ?? "http://localhost:8080";
+const webPort = process.env.WEB_PORT ? Number(process.env.WEB_PORT) : undefined;
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: { "@": path.resolve(__dirname, "./src") },
   },
   server: {
+    port: webPort,
     proxy: {
-      "/api": "http://localhost:8080",
-      "/healthz": "http://localhost:8080",
-      "/readyz": "http://localhost:8080",
+      "/api": apiTarget,
+      "/healthz": apiTarget,
+      "/readyz": apiTarget,
     },
   },
   build: {

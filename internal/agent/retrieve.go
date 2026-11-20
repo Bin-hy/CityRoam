@@ -209,9 +209,8 @@ func missingMustVisit(candidates []domain.POI, wanted []string) []string {
 			continue
 		}
 		found := false
-		normalized := normalizeName(trimmed)
 		for _, poi := range candidates {
-			if poi.ID == trimmed || nameRelated(normalized, normalizeName(poi.Name)) {
+			if poi.ID == trimmed || poi.NameMatches(trimmed) {
 				found = true
 				break
 			}
@@ -234,22 +233,6 @@ func normalizeName(name string) string {
 
 func equalName(a, b string) bool {
 	return a != "" && a == b
-}
-
-func nameRelated(wanted, candidate string) bool {
-	if wanted == "" || candidate == "" {
-		return false
-	}
-	if wanted == candidate {
-		return true
-	}
-	if len([]rune(wanted)) >= 2 && strings.Contains(candidate, wanted) {
-		return true
-	}
-	if len([]rune(candidate)) >= 2 && strings.Contains(wanted, candidate) {
-		return true
-	}
-	return false
 }
 
 func distanceMeters(lat1, lng1, lat2, lng2 float64) float64 {

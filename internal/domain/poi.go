@@ -2,6 +2,7 @@ package domain
 
 import (
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -11,6 +12,7 @@ type POI struct {
 	ID               string      `json:"id"`
 	City             string      `json:"city"`
 	Name             string      `json:"name"`
+	Aliases          []string    `json:"aliases,omitempty"`
 	Category         string      `json:"category"`
 	Area             string      `json:"area"`
 	Address          string      `json:"address"`
@@ -25,6 +27,33 @@ type POI struct {
 	Tags             []string    `json:"tags"`
 	Source           string      `json:"source"`
 	VerifiedAt       *time.Time  `json:"verified_at,omitempty"`
+}
+
+// NameMatches reports whether wanted refers to the POI by id, full name,
+// alias or a partial name such as the shorthand users type.
+func (poi POI) NameMatches(wanted string) bool {
+	normalized := strings.TrimSpace(wanted)
+	if normalized == "" {
+		return false
+	}
+	if poi.ID == normalized {
+		return true
+	}
+	candidates := make([]string, 0, len(poi.Aliases)+1)
+	candidates = append(candidates, poi.Name)
+	candidates = append(candidates, poi.Aliases...)
+	for _, name := range candidates {
+		if name == "" {
+			continue
+		}
+		if name == normalized {
+			return true
+		}
+		if len([]rune(name)) >= 2 && strings.Contains(name, normalized) {
+			return true
+		}
+	}
+	return false
 }
 
 // OpenRange uses weekday numbers matching time.Weekday: 0 is Sunday.

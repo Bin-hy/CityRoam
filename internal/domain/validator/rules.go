@@ -137,18 +137,31 @@ func checkC3(plan domain.Itinerary, pois map[string]domain.POI, routes domain.Ro
 					if transit != nil && transit.Mode != "" {
 						mode = transit.Mode
 					}
-					transport, err := routes.Route(ctx, previousPOI, currentPOI, mode)
-					if err != nil {
-						violations = append(violations, domain.Violation{
-							Code:       "C3",
-							Level:      domain.LevelWarning,
-							Day:        dayIndex + 1,
-							BlockID:    block.ID,
-							POIID:      block.POIID,
-							Message:    fmt.Sprintf("%s 到 %s 无法获取路程，未校验间隔", displayName(previousPOI), displayName(currentPOI)),
-							Suggestion: "稍后重试或改为直线距离估算",
-						})
+
+					// Reuse the transit allocated by the scheduler when present:
+					// a second route query can return a different duration and
+					// make a correctly scheduled gap look too tight.
+					var transport *domain.Transport
+					if transit != nil && transit.DurationMin > 0 {
+						transport = transit
 					} else {
+						routed, err := routes.Route(ctx, previousPOI, currentPOI, mode)
+						if err != nil {
+							violations = append(violations, domain.Violation{
+								Code:       "C3",
+								Level:      domain.LevelWarning,
+								Day:        dayIndex + 1,
+								BlockID:    block.ID,
+								POIID:      block.POIID,
+								Message:    fmt.Sprintf("%s 到 %s 无法获取路程，未校验间隔", displayName(previousPOI), displayName(currentPOI)),
+								Suggestion: "稍后重试或改为直线距离估算",
+							})
+						} else {
+							transport = &routed
+						}
+					}
+
+					if transport != nil {
 						if transport.Estimated {
 							violations = append(violations, domain.Violation{
 								Code:       "C3",
@@ -208,12 +221,13 @@ func checkC4(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.V
 			duration += domain.MinutesPerDay
 		}
 		if duration > maxMinutes {
+			over := duration - maxMinutes
 			violations = append(violations, domain.Violation{
 				Code:       "C4",
 				Level:      domain.LevelBlocking,
 				Day:        dayIndex + 1,
-				Message:    fmt.Sprintf("第 %d 天总时长 %d 分钟，超过上限 %d 分钟", dayIndex+1, duration, maxMinutes),
-				Suggestion: "减少点位或放宽每日时长",
+				Message:    fmt.Sprintf("第 %d 天总时长 %d 分钟，超过上限 %d 分钟，需减少至少 %d 分钟", dayIndex+1, duration, maxMinutes, over),
+				Suggestion: fmt.Sprintf("删除或缩短非必去点，至少减少 %d 分钟", over),
 			})
 		}
 	}
@@ -327,25 +341,46 @@ func checkC7(plan domain.Itinerary, pois map[string]domain.POI, constraints doma
 		return nil
 	}
 
-	present := make(map[string]struct{})
+	present := make([]string, 0)
+	seen := make(map[string]struct{})
+	addName := func(name string) {
+		normalized := normalizeName(name)
+		if normalized == "" {
+			return
+		}
+		if _, dup := seen[normalized]; dup {
+			return
+		}
+		seen[normalized] = struct{}{}
+		present = append(present, normalized)
+	}
 	for _, day := range plan.Days {
 		for _, block := range day.Blocks {
 			if block.POIID == "" {
 				continue
 			}
-			present[normalizeName(block.POIID)] = struct{}{}
-			if block.Title != "" {
-				present[normalizeName(block.Title)] = struct{}{}
-			}
-			if poi, found := pois[block.POIID]; found && poi.Name != "" {
-				present[normalizeName(poi.Name)] = struct{}{}
+			addName(block.POIID)
+			addName(block.Title)
+			if poi, found := pois[block.POIID]; found {
+				addName(poi.Name)
+				for _, alias := range poi.Aliases {
+					addName(alias)
+				}
 			}
 		}
 	}
 
 	violations := make([]domain.Violation, 0)
 	for _, required := range constraints.MustVisit {
-		if _, found := present[normalizeName(required)]; found {
+		normalized := normalizeName(required)
+		found := false
+		for _, name := range present {
+			if name == normalized || nameRelated(normalized, name) {
+				found = true
+				break
+			}
+		}
+		if found {
 			continue
 		}
 		violations = append(violations, domain.Violation{
@@ -511,6 +546,22 @@ func checkC11(plan domain.Itinerary, pois map[string]domain.POI, constraints dom
 
 func normalizeName(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func nameRelated(wanted, candidate string) bool {
+	if wanted == "" || candidate == "" {
+		return false
+	}
+	if wanted == candidate {
+		return true
+	}
+	if len([]rune(wanted)) >= 2 && strings.Contains(candidate, wanted) {
+		return true
+	}
+	if len([]rune(candidate)) >= 2 && strings.Contains(wanted, candidate) {
+		return true
+	}
+	return false
 }
 
 func checkC10(plan domain.Itinerary, constraints domain.ConstraintSet) []domain.Violation {

@@ -110,7 +110,7 @@ func (r *Runner) Run(ctx context.Context, cases []Case) (Report, error) {
 // records the resulting metrics.
 func (r *Runner) RunCase(ctx context.Context, item Case) (RunResult, error) {
 	started := time.Now()
-	result := RunResult{CaseID: item.CaseID}
+	result := RunResult{CaseID: item.CaseID, Days: item.Expected.Days}
 
 	caseCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()

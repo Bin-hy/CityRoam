@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"trippilot/data"
 	"trippilot/internal/domain"
@@ -172,11 +171,7 @@ func matchesTags(poi domain.POI, tags []string) bool {
 }
 
 func matchesName(poi domain.POI, wanted string) bool {
-	normalized := strings.TrimSpace(wanted)
-	if normalized == "" {
-		return false
-	}
-	return poi.ID == normalized || poi.Name == normalized
+	return poi.NameMatches(wanted)
 }
 
 const searchPOISchema = `{

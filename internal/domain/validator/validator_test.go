@@ -145,6 +145,16 @@ func TestC3(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			plan, pois := twoStopPlan(tt.currentArea, tt.currentStart)
+			// The validator trusts the transit allocated by the scheduler, so
+			// only fall back to the provider when the plan has no allocation.
+			plan.Days[0].Blocks[1].Transport = nil
+			if tt.routeErr == nil {
+				transport := tt.transport
+				if transport.Mode == "" {
+					transport.Mode = domain.TransportWalk
+				}
+				plan.Days[0].Blocks[1].Transport = &transport
+			}
 			routes := &fakeRouteProvider{transport: tt.transport, err: tt.routeErr}
 			violations := Validate(plan, domain.ConstraintSet{}, pois, routes)
 
@@ -300,6 +310,26 @@ func TestC7(t *testing.T) {
 	t.Run("all must-visit present", func(t *testing.T) {
 		constraints := domain.ConstraintSet{MustVisit: []string{"A", "c"}}
 		if c7 := violationsByCode(Validate(plan, constraints, pois, nil), "C7"); len(c7) != 0 {
+			t.Fatalf("C7 violations = %+v, want none", c7)
+		}
+	})
+
+	t.Run("shorthand and alias match", func(t *testing.T) {
+		shorthandPlan := poiPlan(1, "museum")
+		shorthandPOIs := map[string]domain.POI{
+			"museum": {
+				ID: "museum", Name: "中国科学技术馆", Aliases: []string{"科技馆"},
+				City: "beijing", Category: "博物馆",
+				OpenHours: []domain.OpenRange{{Days: []int{0, 1, 2, 3, 4, 5, 6}, Start: "00:00", End: "23:59"}},
+			},
+			"palace": {
+				ID: "palace", Name: "故宫博物院", City: "beijing", Category: "历史",
+				OpenHours: []domain.OpenRange{{Days: []int{0, 1, 2, 3, 4, 5, 6}, Start: "00:00", End: "23:59"}},
+			},
+		}
+		shorthandPlan.Days[0].Blocks = append(shorthandPlan.Days[0].Blocks, poiBlock("palace", "10:30", 60))
+		constraints := domain.ConstraintSet{MustVisit: []string{"科技馆", "故宫"}}
+		if c7 := violationsByCode(Validate(shorthandPlan, constraints, shorthandPOIs, nil), "C7"); len(c7) != 0 {
 			t.Fatalf("C7 violations = %+v, want none", c7)
 		}
 	})

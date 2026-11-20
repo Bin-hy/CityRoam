@@ -14,6 +14,7 @@ import (
 const (
 	repairAttempts  = 2
 	maxAlternatives = 15
+	fitAttempts     = 3
 )
 
 type RepairInput struct {
@@ -69,7 +70,8 @@ func (n *Nodes) Repair(ctx context.Context, in RepairInput) (RepairOutput, error
 		return RepairOutput{}, &NodeError{Code: "event_failed", Message: "发布修复开始事件失败", Err: err}
 	}
 
-	alternatives := buildAlternatives(in.Plan, target, in.POIs, in.Candidates)
+	relaxCategory := hasClosedViolation(in.Violations)
+	alternatives := buildAlternatives(in.Plan, target, in.POIs, in.Candidates, relaxCategory)
 	alternativesJSON, err := json.Marshal(alternatives)
 	if err != nil {
 		return RepairOutput{}, &NodeError{Code: "encode_failed", Message: "编码替代点失败", Err: err}
@@ -138,6 +140,7 @@ func (n *Nodes) Repair(ctx context.Context, in RepairInput) (RepairOutput, error
 		return RepairOutput{}, &NodeError{Code: "schedule_failed", Message: "修复后重新排期失败", Err: err}
 	}
 	violations := n.validator.Validate(plan, in.Constraints, in.POIs, n.routes)
+	merged, plan, violations = n.fitDailyHours(merged, plan, violations, in.Constraints, in.POIs)
 	counts := domain.CountByLevel(violations)
 
 	if err := n.events.Publish(ctx, in.RunID, "repair.completed", map[string]any{
@@ -168,14 +171,33 @@ func targetDay(violations []domain.Violation, dayCount int) (int, bool) {
 	if dayCount == 0 {
 		return 0, false
 	}
-	for _, level := range []domain.Level{domain.LevelBlocking, domain.LevelWarning} {
-		for _, violation := range violations {
-			if violation.Level != level {
-				continue
-			}
-			if violation.Day >= 1 && violation.Day <= dayCount {
-				return violation.Day - 1, true
-			}
+	// Repair the day with the most blocking violations first so a late day
+	// does not starve while an earlier day keeps consuming repair rounds.
+	blocking := make([]int, dayCount)
+	for _, violation := range violations {
+		if violation.Level != domain.LevelBlocking {
+			continue
+		}
+		if violation.Day >= 1 && violation.Day <= dayCount {
+			blocking[violation.Day-1]++
+		}
+	}
+	best := -1
+	for day, count := range blocking {
+		if count > 0 && (best == -1 || count > blocking[best]) {
+			best = day
+		}
+	}
+	if best >= 0 {
+		return best, true
+	}
+
+	for _, violation := range violations {
+		if violation.Level != domain.LevelWarning {
+			continue
+		}
+		if violation.Day >= 1 && violation.Day <= dayCount {
+			return violation.Day - 1, true
 		}
 	}
 	for _, violation := range violations {
@@ -196,7 +218,79 @@ func violationsForDay(violations []domain.Violation, dayIndex int) []domain.Viol
 	return filtered
 }
 
-func buildAlternatives(plan domain.Itinerary, dayIndex int, pois map[string]domain.POI, candidates []domain.POI) []promptAlternative {
+// fitDailyHours shortens stays on days that exceed the daily hour limit so a
+// single repair round is not consumed by arithmetic that the scheduler can
+// settle deterministically.
+func (n *Nodes) fitDailyHours(
+	draft domain.DraftPlan,
+	plan domain.Itinerary,
+	violations []domain.Violation,
+	constraints domain.ConstraintSet,
+	pois map[string]domain.POI,
+) (domain.DraftPlan, domain.Itinerary, []domain.Violation) {
+	maxMinutes := constraints.ApplyDefaults().Daily.MaxHours * 60
+	if maxMinutes <= 0 {
+		return draft, plan, violations
+	}
+
+	for attempt := 0; attempt < fitAttempts; attempt++ {
+		trimmed := false
+		for _, violation := range violations {
+			if violation.Code != "C4" || violation.Level != domain.LevelBlocking {
+				continue
+			}
+			dayIndex := violation.Day - 1
+			if dayIndex < 0 || dayIndex >= len(plan.Days) || dayIndex >= len(draft.Days) {
+				continue
+			}
+			start, startErr := domain.ParseClock(plan.Days[dayIndex].StartTime)
+			end, endErr := domain.ParseClock(plan.Days[dayIndex].EndTime)
+			if startErr != nil || endErr != nil {
+				continue
+			}
+			over := end - start
+			if over < 0 {
+				over += domain.MinutesPerDay
+			}
+			over -= maxMinutes
+			items := draft.Days[dayIndex].Items
+			for itemIndex := len(items) - 1; itemIndex >= 0 && over > 0; itemIndex-- {
+				item := &items[itemIndex]
+				if item.DurationMin <= minItemMinutes {
+					continue
+				}
+				cut := min(item.DurationMin-minItemMinutes, over)
+				item.DurationMin -= cut
+				over -= cut
+				trimmed = true
+			}
+		}
+		if !trimmed {
+			break
+		}
+		built, err := n.scheduler.Build(draft, constraints, pois, n.routes)
+		if err != nil {
+			break
+		}
+		plan = built
+		violations = n.validator.Validate(plan, constraints, pois, n.routes)
+		if !hasBlockingCode(violations, "C4") {
+			break
+		}
+	}
+	return draft, plan, violations
+}
+
+func hasBlockingCode(violations []domain.Violation, code string) bool {
+	for _, violation := range violations {
+		if violation.Code == code && violation.Level == domain.LevelBlocking {
+			return true
+		}
+	}
+	return false
+}
+
+func buildAlternatives(plan domain.Itinerary, dayIndex int, pois map[string]domain.POI, candidates []domain.POI, relaxCategory bool) []promptAlternative {
 	used := make(map[string]struct{})
 	for _, day := range plan.Days {
 		for _, block := range day.Blocks {
@@ -223,7 +317,7 @@ func buildAlternatives(plan domain.Itinerary, dayIndex int, pois map[string]doma
 		if _, alreadyUsed := used[poi.ID]; alreadyUsed {
 			continue
 		}
-		if len(categories) > 0 {
+		if !relaxCategory && len(categories) > 0 {
 			if _, sameCategory := categories[poi.Category]; !sameCategory {
 				continue
 			}
@@ -257,6 +351,17 @@ func planDayBlocks(plan domain.Itinerary, dayIndex int) []domain.Block {
 	return plan.Days[dayIndex].Blocks
 }
 
+// hasClosedViolation reports whether the day contains a blocking closure, in
+// which case relevance filters must yield to any open replacement.
+func hasClosedViolation(violations []domain.Violation) bool {
+	for _, violation := range violations {
+		if violation.Level == domain.LevelBlocking && violation.Code == "C2" {
+			return true
+		}
+	}
+	return false
+}
+
 func openOnDate(poi domain.POI, date string) string {
 	if len(poi.OpenHours) == 0 {
 		return "unknown"
@@ -276,7 +381,7 @@ func openOnDate(poi domain.POI, date string) string {
 		hasValidRange = true
 		for _, day := range openRange.Days {
 			if day == weekday {
-				return "open"
+				return "open " + openRange.Start + "-" + openRange.End
 			}
 		}
 	}
@@ -292,10 +397,10 @@ func parseClock(value string) (int, bool) {
 }
 
 func statusRank(status string) int {
-	switch status {
-	case "open":
+	switch {
+	case strings.HasPrefix(status, "open"):
 		return 0
-	case "unknown":
+	case strings.HasPrefix(status, "unknown"):
 		return 1
 	default:
 		return 2

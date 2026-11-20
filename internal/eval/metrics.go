@@ -39,6 +39,7 @@ type Summary struct {
 type RunResult struct {
 	CaseID    string     `json:"case_id"`
 	RunID     string     `json:"run_id,omitempty"`
+	Days      int        `json:"days,omitempty"`
 	Passed    bool       `json:"passed"`
 	Reason    string     `json:"reason,omitempty"`
 	Metrics   RunMetrics `json:"metrics"`
@@ -222,6 +223,7 @@ func Summarize(results []RunResult) Summary {
 	}
 
 	latencies := make([]int64, 0, len(results))
+	threeDay := make([]int64, 0, len(results))
 	var rounds int
 	var poiValid, jsonCalls, jsonAttempts int
 	for _, result := range results {
@@ -229,6 +231,9 @@ func Summarize(results []RunResult) Summary {
 			summary.Passed++
 		}
 		latencies = append(latencies, result.Metrics.LatencyMS)
+		if result.Days == 3 {
+			threeDay = append(threeDay, result.Metrics.LatencyMS)
+		}
 		rounds += result.Metrics.RepairRounds
 		if result.Metrics.POIValid {
 			poiValid++
@@ -242,6 +247,9 @@ func Summarize(results []RunResult) Summary {
 	summary.POIValidRate = float64(poiValid) / float64(len(results))
 	if jsonAttempts > 0 {
 		summary.JSONValidRate = float64(jsonCalls) / float64(jsonAttempts)
+	}
+	if len(threeDay) > 0 {
+		latencies = threeDay
 	}
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 	index := (95*len(latencies)+99)/100 - 1

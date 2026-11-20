@@ -60,6 +60,28 @@ func TestSnapshotSearch(t *testing.T) {
 			t.Fatalf("result = %d, want %d", len(result), len(pois))
 		}
 	})
+
+	t.Run("partial must-visit name matches", func(t *testing.T) {
+		museum := NewSnapshot([]domain.POI{
+			{ID: "park", City: "beijing", Name: "景山公园", Category: "公园"},
+			{ID: "science-museum", City: "beijing", Name: "中国科学技术馆", Category: "博物馆"},
+		})
+		result := museum.Search(SearchQuery{City: "beijing", MustVisit: []string{"科学技术馆"}})
+		if len(result) == 0 || result[0].ID != "science-museum" {
+			t.Fatalf("result = %+v, want science-museum promoted", result)
+		}
+	})
+
+	t.Run("must-visit alias matches", func(t *testing.T) {
+		museum := NewSnapshot([]domain.POI{
+			{ID: "park", City: "beijing", Name: "景山公园", Category: "公园"},
+			{ID: "science-museum", City: "beijing", Name: "中国科学技术馆", Aliases: []string{"科技馆"}, Category: "博物馆"},
+		})
+		result := museum.Search(SearchQuery{City: "beijing", MustVisit: []string{"科技馆"}})
+		if len(result) == 0 || result[0].ID != "science-museum" {
+			t.Fatalf("result = %+v, want alias promoted", result)
+		}
+	})
 }
 
 func TestSnapshotSearchLimit(t *testing.T) {

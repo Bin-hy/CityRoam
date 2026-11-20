@@ -81,6 +81,44 @@ func TestSchedulerStart(t *testing.T) {
 			t.Fatalf("block end = %s, want 21:30", got)
 		}
 	})
+
+	t.Run("waits for opening", func(t *testing.T) {
+		street := museum
+		street.ID = "street"
+		street.OpenHours = []domain.OpenRange{{
+			Days:  []int{0, 1, 2, 3, 4, 5, 6},
+			Start: "10:00",
+			End:   "22:00",
+		}}
+		pois := map[string]domain.POI{street.ID: street}
+		constraints := domain.ConstraintSet{
+			City: "beijing",
+			Daily: domain.DailyConstraint{
+				StartTime: "09:00",
+				EndTime:   "21:00",
+				MaxHours:  9,
+			},
+		}
+		draft := domain.DraftPlan{Days: []domain.DraftDay{{
+			Date:  "2026-11-16",
+			Items: []domain.DraftItem{{POIID: street.ID, Type: domain.ItemTypePOI, DurationMin: 90}},
+		}}}
+
+		plan, err := New().Build(draft, constraints, pois, nil)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		day := plan.Days[0]
+		if len(day.Blocks) != 2 {
+			t.Fatalf("blocks = %+v, want wait and POI", day.Blocks)
+		}
+		if day.Blocks[0].Type != domain.BlockTypeRest || day.Blocks[0].Start != "09:00" || day.Blocks[0].End != "10:00" {
+			t.Fatalf("wait block = %+v", day.Blocks[0])
+		}
+		if day.Blocks[1].Start != "10:00" || day.Blocks[1].End != "11:30" {
+			t.Fatalf("POI block = %+v", day.Blocks[1])
+		}
+	})
 }
 
 func TestSchedulerTransit(t *testing.T) {
