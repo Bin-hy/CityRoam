@@ -35,30 +35,33 @@ type AdjustmentProposal struct {
 // TripState is the serializable payload that flows through the Eino graph and
 // is persisted after every stage so an awaiting run can resume from the DB.
 type TripState struct {
-	TripID         string               `json:"trip_id,omitempty"`
-	RunID          string               `json:"run_id"`
-	Mode           string               `json:"mode,omitempty"`
-	Input          string               `json:"input"`
-	Constraints    domain.ConstraintSet `json:"constraints"`
-	Missing        []string             `json:"missing,omitempty"`
-	Candidates     []domain.POI         `json:"candidates,omitempty"`
-	Draft          domain.DraftPlan     `json:"draft"`
-	Plan           domain.Itinerary     `json:"plan"`
-	Violations     []domain.Violation   `json:"violations,omitempty"`
-	Round          int                  `json:"round"`
-	Best           *domain.Itinerary    `json:"best,omitempty"`
-	BestViolations []domain.Violation   `json:"best_violations,omitempty"`
-	History        []RoundMetrics       `json:"history,omitempty"`
-	StopReason     string               `json:"stop_reason,omitempty"`
-	Suggestions    []string             `json:"suggestions,omitempty"`
-	LLM            Usage                `json:"llm,omitzero"`
-	Snapshot       *VersionSnapshot     `json:"snapshot,omitempty"`
-	Proposal       *AdjustmentProposal  `json:"proposal,omitempty"`
-	Previous       *domain.Itinerary    `json:"previous,omitempty"`
-	PreviousSeq    int                  `json:"previous_seq,omitempty"`
-	Stage          string               `json:"stage,omitempty"`
-	Status         string               `json:"status"`
-	Error          *RunError            `json:"error,omitempty"`
+	TripID           string                   `json:"trip_id,omitempty"`
+	RunID            string                   `json:"run_id"`
+	Mode             string                   `json:"mode,omitempty"`
+	Input            string                   `json:"input"`
+	Constraints      domain.ConstraintSet     `json:"constraints"`
+	Missing          []string                 `json:"missing,omitempty"`
+	Candidates       []domain.POI             `json:"candidates,omitempty"`
+	Draft            domain.DraftPlan         `json:"draft"`
+	Plan             domain.Itinerary         `json:"plan"`
+	Violations       []domain.Violation       `json:"violations,omitempty"`
+	Round            int                      `json:"round"`
+	Best             *domain.Itinerary        `json:"best,omitempty"`
+	BestViolations   []domain.Violation       `json:"best_violations,omitempty"`
+	History          []RoundMetrics           `json:"history,omitempty"`
+	StopReason       string                   `json:"stop_reason,omitempty"`
+	Suggestions      []string                 `json:"suggestions,omitempty"`
+	LLM              Usage                    `json:"llm,omitzero"`
+	Snapshot         *VersionSnapshot         `json:"snapshot,omitempty"`
+	Research         *domain.ResearchBrief    `json:"research,omitempty"`
+	ResearchQuestion *domain.ResearchQuestion `json:"research_question,omitempty"`
+	ResolvedHotel    *domain.Hotel            `json:"resolved_hotel,omitempty"`
+	Proposal         *AdjustmentProposal      `json:"proposal,omitempty"`
+	Previous         *domain.Itinerary        `json:"previous,omitempty"`
+	PreviousSeq      int                      `json:"previous_seq,omitempty"`
+	Stage            string                   `json:"stage,omitempty"`
+	Status           string                   `json:"status"`
+	Error            *RunError                `json:"error,omitempty"`
 }
 
 func (s *TripState) Encode() (json.RawMessage, error) {

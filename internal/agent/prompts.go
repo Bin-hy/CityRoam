@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"text/template"
 )
 
@@ -63,8 +64,24 @@ type ExplainPromptData struct {
 	Diff        json.RawMessage
 }
 
+const researchPromptSeparator = "\n---USER---\n"
+
+// RenderResearchPrompt splits research.tmpl into the system and user messages
+// required by tool-calling Chat Completions.
+func RenderResearchPrompt(data ResearchPromptData) (system, user string, err error) {
+	rendered, err := RenderPrompt("research", data)
+	if err != nil {
+		return "", "", err
+	}
+	parts := strings.SplitN(rendered, researchPromptSeparator, 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("agent: research prompt is missing the system/user separator")
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
+}
+
 // RenderPrompt executes one of the embedded templates by short name
-// ("parse", "draft", "repair", "adjust", "explain").
+// ("parse", "draft", "repair", "adjust", "explain", "research").
 func RenderPrompt(name string, data any) (string, error) {
 	var buf bytes.Buffer
 	if err := promptTemplates.ExecuteTemplate(&buf, name+".tmpl", data); err != nil {

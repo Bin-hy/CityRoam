@@ -46,6 +46,13 @@ type Nodes struct {
 	scheduler      Scheduler
 	validator      Validator
 	routes         domain.RouteProvider
+
+	toolLLM              ToolLLM
+	researchTools        []ResearchTool
+	researchDisabled     []DisabledPlugin
+	researchTimeout      time.Duration
+	researchMaxToolCalls int
+	researchContext      func(context.Context, string, string) context.Context
 }
 
 type NodeOption func(*Nodes)
@@ -58,15 +65,55 @@ func WithNodeClock(now func() time.Time) NodeOption {
 	return func(n *Nodes) { n.now = now }
 }
 
+func WithToolLLM(client ToolLLM) NodeOption {
+	return func(n *Nodes) { n.toolLLM = client }
+}
+
+func WithResearchTools(tools ...ResearchTool) NodeOption {
+	return func(n *Nodes) {
+		n.researchTools = make([]ResearchTool, 0, len(tools))
+		for _, tool := range tools {
+			if tool != nil {
+				n.researchTools = append(n.researchTools, tool)
+			}
+		}
+	}
+}
+
+func WithResearchLimits(timeout time.Duration, maxToolCalls int) NodeOption {
+	return func(n *Nodes) {
+		if timeout > 0 {
+			n.researchTimeout = timeout
+		}
+		if maxToolCalls > 0 {
+			n.researchMaxToolCalls = maxToolCalls
+		}
+	}
+}
+
+func WithResearchDisabled(disabled ...DisabledPlugin) NodeOption {
+	return func(n *Nodes) {
+		n.researchDisabled = append([]DisabledPlugin(nil), disabled...)
+	}
+}
+
+// WithResearchContext lets wiring attach run identity (for the plugin
+// Governor) without making the agent package depend on plugins.
+func WithResearchContext(decorate func(context.Context, string, string) context.Context) NodeOption {
+	return func(n *Nodes) { n.researchContext = decorate }
+}
+
 func NewNodes(llm LLMClient, events EventPublisher, opts ...NodeOption) *Nodes {
 	n := &Nodes{
-		llm:            llm,
-		events:         events,
-		logger:         slog.Default(),
-		now:            time.Now,
-		candidateLimit: maxCandidates,
-		scheduler:      defaultScheduler(),
-		validator:      defaultValidator(),
+		llm:                  llm,
+		events:               events,
+		logger:               slog.Default(),
+		now:                  time.Now,
+		candidateLimit:       maxCandidates,
+		scheduler:            defaultScheduler(),
+		validator:            defaultValidator(),
+		researchTimeout:      12 * time.Second,
+		researchMaxToolCalls: 6,
 	}
 	for _, opt := range opts {
 		opt(n)

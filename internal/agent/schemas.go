@@ -157,4 +157,87 @@ var (
 	    "summary": {"type": "string", "maxLength": 200}
 	  }
 	}`)
+
+	ResearchBriefSchema = json.RawMessage(`{
+	  "$schema": "https://json-schema.org/draft/2020-12/schema",
+	  "type": "object",
+	  "additionalProperties": false,
+	  "required": ["status"],
+	  "properties": {
+	    "status": {"type": "string", "enum": ["ok", "degraded", "skipped"]},
+	    "accommodation": {
+	      "type": "object",
+	      "additionalProperties": false,
+	      "properties": {
+	        "mentioned": {"type": "boolean"},
+	        "specified": {"type": "array", "items": {"type": "string"}},
+	        "selected": {"$ref": "#/$defs/hotel"},
+	        "options": {"type": "array", "maxItems": 5, "items": {"$ref": "#/$defs/hotel"}},
+	        "anchor_days": {"type": "array", "maxItems": 4, "items": {"type": "integer", "minimum": 0, "maximum": 3}},
+	        "nights": {"type": "integer", "minimum": 0},
+	        "nightly_yuan": {"type": "integer", "minimum": 0},
+	        "total_yuan": {"type": "integer", "minimum": 0},
+	        "price_estimated": {"type": "boolean"},
+	        "include_in_budget": {"type": "boolean"},
+	        "reason": {"type": "string", "maxLength": 200}
+	      }
+	    },
+	    "guides": {
+	      "type": "array",
+	      "items": {
+	        "type": "object",
+	        "additionalProperties": false,
+	        "required": ["poi_id", "weight", "mentions"],
+	        "properties": {
+	          "poi_id": {"type": "string"},
+	          "weight": {"type": "number", "minimum": 0, "maximum": 1},
+	          "mentions": {"type": "integer", "minimum": 0},
+	          "note": {"type": "string", "maxLength": 120},
+	          "citations": {
+	            "type": "array",
+	            "maxItems": 3,
+	            "items": {
+	              "type": "object",
+	              "additionalProperties": false,
+	              "required": ["title", "url"],
+	              "properties": {
+	                "title": {"type": "string"},
+	                "url": {"type": "string"},
+	                "site": {"type": "string"},
+	                "published_at": {"type": "string"},
+	                "authority": {"type": "integer", "minimum": 0}
+	              }
+	            }
+	          }
+	        }
+	      }
+	    },
+	    "notes": {"type": "array", "items": {"type": "string"}},
+	    "warnings": {"type": "array", "items": {"type": "string"}},
+	    "tool_calls": {"type": "integer", "minimum": 0},
+	    "duration_ms": {"type": "integer", "minimum": 0}
+	  },
+	  "$defs": {
+	    "hotel": {
+	      "type": "object",
+	      "additionalProperties": false,
+	      "required": ["id", "name", "lat", "lng", "price_per_night_yuan", "price_estimated", "provider", "fetched_at"],
+	      "properties": {
+	        "id": {"type": "string"},
+	        "name": {"type": "string"},
+	        "address": {"type": "string"},
+	        "city": {"type": "string"},
+	        "lat": {"type": "number"},
+	        "lng": {"type": "number"},
+	        "star": {"type": "integer", "minimum": 0, "maximum": 5},
+	        "score": {"type": "number", "minimum": 0, "maximum": 5},
+	        "price_per_night_yuan": {"type": "integer", "minimum": 0},
+	        "price_estimated": {"type": "boolean"},
+	        "booking_url": {"type": "string"},
+	        "provider": {"type": "string"},
+	        "fetched_at": {"type": "string"}
+	      }
+	    }
+	  }
+	}`)
 )

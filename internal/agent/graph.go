@@ -14,6 +14,7 @@ const (
 	nodeAdmit    = "admit"
 	nodeParse    = "parse"
 	nodeRetrieve = "retrieve"
+	nodeResearch = "research"
 	nodeDraft    = "draft"
 	nodeSchedule = "schedule"
 	nodeValidate = "validate"
@@ -61,6 +62,7 @@ func NewGraph(ctx context.Context, nodes *Nodes, opts ...GraphOption) (*Graph, e
 		{nodeAdmit, graph.admit},
 		{nodeParse, graph.parse},
 		{nodeRetrieve, graph.retrieve},
+		{nodeResearch, graph.research},
 		{nodeDraft, graph.draft},
 		{nodeSchedule, graph.schedule},
 		{nodeValidate, graph.validate},
@@ -92,7 +94,7 @@ func NewGraph(ctx context.Context, nodes *Nodes, opts ...GraphOption) (*Graph, e
 	edges := [][2]string{
 		{compose.START, nodeAdmit},
 		{nodeAdmit, nodeParse},
-		{nodeRetrieve, nodeDraft},
+		{nodeRetrieve, nodeResearch},
 		{nodeDraft, nodeSchedule},
 		{nodeSchedule, nodeValidate},
 		{nodeRepair, nodeValidate},
@@ -112,6 +114,16 @@ func NewGraph(ctx context.Context, nodes *Nodes, opts ...GraphOption) (*Graph, e
 	}, map[string]bool{nodeRetrieve: true, compose.END: true})
 	if err := g.AddBranch(nodeParse, afterParse); err != nil {
 		return nil, fmt.Errorf("agent: add parse branch: %w", err)
+	}
+
+	afterResearch := compose.NewGraphBranch(func(_ context.Context, state *TripState) (string, error) {
+		if state.ResearchQuestion != nil {
+			return compose.END, nil
+		}
+		return nodeDraft, nil
+	}, map[string]bool{nodeDraft: true, compose.END: true})
+	if err := g.AddBranch(nodeResearch, afterResearch); err != nil {
+		return nil, fmt.Errorf("agent: add research branch: %w", err)
 	}
 
 	afterValidate := compose.NewGraphBranch(graph.afterValidate, map[string]bool{
@@ -179,6 +191,28 @@ func (g *Graph) retrieve(ctx context.Context, state *TripState) (*TripState, err
 		return nil, err
 	}
 	state.Candidates = out.Candidates
+	return state, nil
+}
+
+func (g *Graph) research(ctx context.Context, state *TripState) (*TripState, error) {
+	out, err := g.nodes.Research(ctx, ResearchInput{
+		RunID:         state.RunID,
+		TripID:        state.TripID,
+		Input:         state.Input,
+		Constraints:   state.Constraints,
+		Candidates:    state.Candidates,
+		ResolvedHotel: state.ResolvedHotel,
+	})
+	if err != nil {
+		return nil, err
+	}
+	brief := out.Brief
+	state.Research = &brief
+	state.ResearchQuestion = out.Question
+	state.LLM = addUsage(state.LLM, out.Usage)
+	if out.Question != nil {
+		state.Status = StatusAwaitingUser
+	}
 	return state, nil
 }
 
