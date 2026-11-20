@@ -56,6 +56,18 @@ func (s *Store) GetTrip(ctx context.Context, id string) (Trip, error) {
 	return s.q.GetTrip(ctx, id)
 }
 
+func (s *Store) GetPluginCache(ctx context.Context, key string) (PluginCache, error) {
+	return s.q.GetPluginCache(ctx, key)
+}
+
+func (s *Store) SetPluginCache(ctx context.Context, arg SetPluginCacheParams) error {
+	return s.q.SetPluginCache(ctx, arg)
+}
+
+func (s *Store) DeleteExpiredPluginCache(ctx context.Context) error {
+	return s.q.DeleteExpiredPluginCache(ctx)
+}
+
 func (s *Store) GetTripByRequestID(ctx context.Context, requestID string) (Trip, error) {
 	return s.q.GetTripByRequestID(ctx, &requestID)
 }

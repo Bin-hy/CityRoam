@@ -36,6 +36,47 @@ type LLMClient interface {
 	GenerateJSON(ctx context.Context, prompt string, schema json.RawMessage) (json.RawMessage, Usage, error)
 }
 
+type ChatMessage struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+type ToolCall struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+type ToolDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+type ToolCompletionRequest struct {
+	System   string
+	Messages []ChatMessage
+	Tools    []ToolDefinition
+}
+
+type ToolCompletion struct {
+	Content   string
+	ToolCalls []ToolCall
+}
+
+type ToolLLM interface {
+	CompleteWithTools(ctx context.Context, req ToolCompletionRequest) (ToolCompletion, Usage, error)
+}
+
+type ResearchTool interface {
+	Name() string
+	Description() string
+	InputSchema() json.RawMessage
+	Call(ctx context.Context, input json.RawMessage) (json.RawMessage, error)
+}
+
 // OpenAIClient targets OpenAI-compatible Chat Completions endpoints such as
 // DeepSeek. Only JSON output is requested; schema enforcement stays in code.
 type OpenAIClient struct {
@@ -151,6 +192,172 @@ type remoteUsage struct {
 	PromptTokens     int    `json:"prompt_tokens"`
 	CompletionTokens int    `json:"completion_tokens"`
 	TotalTokens      int    `json:"total_tokens"`
+}
+
+type wireToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type wireMessage struct {
+	Role       string         `json:"role"`
+	Content    string         `json:"content"`
+	ToolCalls  []wireToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+func (c *OpenAIClient) CompleteWithTools(ctx context.Context, req ToolCompletionRequest) (out ToolCompletion, usage Usage, err error) {
+	start := time.Now()
+	usage = Usage{Model: c.model, Calls: 1, Attempts: 1}
+	defer func() { usage.Duration = time.Since(start) }()
+
+	messages := make([]wireMessage, 0, len(req.Messages)+1)
+	if strings.TrimSpace(req.System) != "" {
+		messages = append(messages, wireMessage{Role: "system", Content: req.System})
+	}
+	for _, message := range req.Messages {
+		wire := wireMessage{Role: message.Role, Content: message.Content, ToolCallID: message.ToolCallID}
+		for _, call := range message.ToolCalls {
+			if call.ID == "" || call.Name == "" {
+				return ToolCompletion{}, usage, fmt.Errorf("llm: tool call is missing id or name")
+			}
+			arguments := call.Arguments
+			if len(arguments) == 0 {
+				arguments = json.RawMessage(`{}`)
+			}
+			if !json.Valid(arguments) {
+				return ToolCompletion{}, usage, fmt.Errorf("llm: tool call arguments are not valid JSON")
+			}
+			wire.ToolCalls = append(wire.ToolCalls, wireToolCall{
+				ID:   call.ID,
+				Type: "function",
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{Name: call.Name, Arguments: string(arguments)},
+			})
+		}
+		messages = append(messages, wire)
+	}
+
+	tools := make([]map[string]any, 0, len(req.Tools))
+	for _, tool := range req.Tools {
+		if tool.Name == "" {
+			return ToolCompletion{}, usage, fmt.Errorf("llm: tool definition is missing name")
+		}
+		parameters := tool.Parameters
+		if len(parameters) == 0 {
+			parameters = json.RawMessage(`{"type":"object"}`)
+		}
+		if !json.Valid(parameters) {
+			return ToolCompletion{}, usage, fmt.Errorf("llm: tool %s parameters are not valid JSON", tool.Name)
+		}
+		tools = append(tools, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        tool.Name,
+				"description": tool.Description,
+				"parameters":  json.RawMessage(parameters),
+			},
+		})
+	}
+
+	body := map[string]any{
+		"model":       c.model,
+		"messages":    messages,
+		"tool_choice": "auto",
+		"temperature": c.temperature,
+	}
+	if len(tools) > 0 {
+		body["tools"] = tools
+	}
+	if c.maxTokens > 0 {
+		body["max_tokens"] = c.maxTokens
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return ToolCompletion{}, usage, fmt.Errorf("llm: encode request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(encoded))
+	if err != nil {
+		return ToolCompletion{}, usage, fmt.Errorf("llm: build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return ToolCompletion{}, usage, fmt.Errorf("llm: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBytes))
+		return ToolCompletion{}, usage, fmt.Errorf("llm: status %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
+	}
+
+	var decoded struct {
+		Model   string `json:"model"`
+		Choices []struct {
+			Message struct {
+				Content   *string        `json:"content"`
+				ToolCalls []wireToolCall `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage remoteUsage `json:"usage"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&decoded); err != nil {
+		return ToolCompletion{}, usage, fmt.Errorf("llm: decode response: %w", err)
+	}
+	if len(decoded.Choices) == 0 {
+		return ToolCompletion{}, usage, fmt.Errorf("llm: response has no choices")
+	}
+	usage.PromptTokens = decoded.Usage.PromptTokens
+	usage.CompletionTokens = decoded.Usage.CompletionTokens
+	usage.TotalTokens = decoded.Usage.TotalTokens
+	usage.Model = decoded.Model
+	if usage.Model == "" {
+		usage.Model = c.model
+	}
+
+	message := decoded.Choices[0].Message
+	out = ToolCompletion{}
+	if message.Content != nil {
+		out.Content = *message.Content
+	}
+	for _, call := range message.ToolCalls {
+		if call.Function.Name == "" {
+			return ToolCompletion{}, usage, fmt.Errorf("llm: response tool call is missing name")
+		}
+		arguments := strings.TrimSpace(call.Function.Arguments)
+		if !json.Valid([]byte(arguments)) {
+			return ToolCompletion{}, usage, fmt.Errorf("llm: tool %s returned invalid JSON arguments", call.Function.Name)
+		}
+		out.ToolCalls = append(out.ToolCalls, ToolCall{
+			ID:        call.ID,
+			Name:      call.Function.Name,
+			Arguments: json.RawMessage(arguments),
+		})
+	}
+	if strings.TrimSpace(out.Content) == "" && len(out.ToolCalls) == 0 {
+		return ToolCompletion{}, usage, fmt.Errorf("llm: response has neither content nor tool calls")
+	}
+
+	c.logger.Info("llm tool request",
+		"model", usage.Model,
+		"prompt_tokens", usage.PromptTokens,
+		"completion_tokens", usage.CompletionTokens,
+		"tool_calls", len(out.ToolCalls),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	return out, usage, nil
 }
 
 func (c *OpenAIClient) complete(ctx context.Context, prompt string) (string, remoteUsage, error) {

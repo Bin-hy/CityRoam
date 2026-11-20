@@ -201,3 +201,116 @@ func TestLLMRequiresConfig(t *testing.T) {
 		t.Fatalf("endpoint = %s", client.endpoint)
 	}
 }
+
+func TestCompleteWithTools(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		io.WriteString(w, `{
+			"model": "deepseek-chat",
+			"choices": [{"message": {
+				"content": "",
+				"tool_calls": [
+					{"id":"c1","type":"function","function":{"name":"search_hotels","arguments":"{\"city\":\"北京\"}"}},
+					{"id":"c2","type":"function","function":{"name":"search_travel_notes","arguments":"{\"query\":\"胡同\"}"}}
+				]
+			}}],
+			"usage": {"prompt_tokens": 80, "completion_tokens": 12, "total_tokens": 92}
+		}`)
+	}))
+	defer server.Close()
+
+	client, err := NewOpenAIClient(server.URL, "secret-key", "deepseek-chat", WithLLMLogger(discardLogger()))
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	result, usage, err := client.CompleteWithTools(context.Background(), ToolCompletionRequest{
+		System: "system",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "北京两天"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "search_hotels", Arguments: json.RawMessage(`{"city":"beijing"}`)}}},
+			{Role: "tool", ToolCallID: "c1", Content: `{"hotels":[]}`},
+		},
+		Tools: []ToolDefinition{{
+			Name:        "search_hotels",
+			Description: "search",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if len(result.ToolCalls) != 2 {
+		t.Fatalf("tool calls = %+v", result.ToolCalls)
+	}
+	if result.ToolCalls[0].Name != "search_hotels" || string(result.ToolCalls[0].Arguments) != `{"city":"北京"}` {
+		t.Fatalf("first call = %+v", result.ToolCalls[0])
+	}
+	if result.ToolCalls[1].Name != "search_travel_notes" {
+		t.Fatalf("second call = %+v", result.ToolCalls[1])
+	}
+	if usage.TotalTokens != 92 || usage.Calls != 1 || usage.Attempts != 1 {
+		t.Fatalf("usage = %+v", usage)
+	}
+	if _, found := gotBody["response_format"]; found {
+		t.Fatal("tool completion must not send response_format")
+	}
+	if gotBody["tool_choice"] != "auto" {
+		t.Fatalf("tool_choice = %v", gotBody["tool_choice"])
+	}
+	if _, ok := gotBody["tools"].([]any); !ok {
+		t.Fatalf("tools = %#v", gotBody["tools"])
+	}
+	messages, ok := gotBody["messages"].([]any)
+	if !ok || len(messages) != 4 {
+		t.Fatalf("messages = %#v", gotBody["messages"])
+	}
+	system, _ := messages[0].(map[string]any)
+	if system["role"] != "system" || system["content"] != "system" {
+		t.Fatalf("system message = %#v", messages[0])
+	}
+	assistant, _ := messages[2].(map[string]any)
+	calls, _ := assistant["tool_calls"].([]any)
+	if len(calls) != 1 {
+		t.Fatalf("assistant tool_calls = %#v", assistant["tool_calls"])
+	}
+	toolMessage, _ := messages[3].(map[string]any)
+	if toolMessage["tool_call_id"] != "c1" || toolMessage["role"] != "tool" {
+		t.Fatalf("tool message = %#v", messages[3])
+	}
+}
+
+func TestCompleteWithToolsPlainContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"{\"status\":\"ok\"}"}}]}`)
+	}))
+	defer server.Close()
+
+	client, _ := NewOpenAIClient(server.URL, "", "m", WithLLMLogger(discardLogger()))
+	result, _, err := client.CompleteWithTools(context.Background(), ToolCompletionRequest{
+		Messages: []ChatMessage{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.Content != `{"status":"ok"}` || len(result.ToolCalls) != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestCompleteWithToolsRejectsInvalidArguments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"tool_calls":[{"id":"c1","function":{"name":"x","arguments":"not-json"}}]}}]}`)
+	}))
+	defer server.Close()
+
+	client, _ := NewOpenAIClient(server.URL, "", "m", WithLLMLogger(discardLogger()))
+	_, _, err := client.CompleteWithTools(context.Background(), ToolCompletionRequest{
+		Messages: []ChatMessage{{Role: "user", Content: "hi"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid JSON arguments") {
+		t.Fatalf("err = %v", err)
+	}
+}
