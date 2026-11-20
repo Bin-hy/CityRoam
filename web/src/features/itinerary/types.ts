@@ -35,6 +35,7 @@ export interface Totals {
   cost_yuan: number;
   poi_count: number;
   walking_km: number;
+  lodging_yuan?: number;
 }
 
 export interface Itinerary {
@@ -60,6 +61,7 @@ export function parseItinerary(raw: unknown): Itinerary | null {
       cost_yuan: typeof value.totals?.cost_yuan === "number" ? value.totals.cost_yuan : 0,
       poi_count: typeof value.totals?.poi_count === "number" ? value.totals.poi_count : 0,
       walking_km: typeof value.totals?.walking_km === "number" ? value.totals.walking_km : 0,
+      lodging_yuan: typeof value.totals?.lodging_yuan === "number" ? value.totals.lodging_yuan : 0,
     },
   };
 }

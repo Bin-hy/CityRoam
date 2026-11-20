@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { MissingFieldsForm } from "@/features/constraints/MissingFieldsForm";
+import type { ResearchQuestion, ResearchOption } from "@/features/research/types";
 import type { RunStatus } from "@/features/trace/traceReducer";
 
 const MAX_ADJUSTMENT = 2000;
@@ -32,6 +33,7 @@ export interface RunActionsProps {
   status: RunStatus;
   missing: string[];
   proposal: Record<string, unknown> | null;
+  researchQuestion?: ResearchQuestion | null;
   baseVersion: number | null;
   onRunStarted: (runID: string) => void;
   onActionComplete: () => void;
@@ -43,6 +45,7 @@ export function RunActions({
   status,
   missing,
   proposal,
+  researchQuestion = null,
   baseVersion,
   onRunStarted,
   onActionComplete,
@@ -75,6 +78,39 @@ export function RunActions({
   }
 
   if (status === "awaiting_user") {
+    if (researchQuestion) {
+      return (
+        <Card>
+          <CardHeader>
+            <CardTitle>确认住宿</CardTitle>
+            <CardDescription>{researchQuestion.message || "请选择要使用的酒店，或继续但不计住宿。"}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {researchQuestion.options.map((option) => (
+              <ResearchOptionCard
+                key={option.id}
+                option={option}
+                disabled={busy}
+                onSelect={() =>
+                  resume.mutate({
+                    action: "resolve_research",
+                    research_choice: option.hotel
+                      ? { option_id: option.id, hotel: option.hotel }
+                      : { option_id: option.id },
+                  })
+                }
+              />
+            ))}
+            {error && (
+              <Alert variant="destructive" className="text-sm">
+                {error}
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+      );
+    }
+
     if (missing.length > 0) {
       return (
         <Card>
@@ -174,4 +210,61 @@ export function RunActions({
   }
 
   return null;
+}
+
+function ResearchOptionCard({
+  option,
+  disabled,
+  onSelect,
+}: {
+  option: ResearchOption;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  const hotel = option.hotel;
+  const booking = safeURL(hotel?.booking_url);
+  return (
+    <div className="rounded-md border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-medium">{option.label}</p>
+          {option.description && <p className="text-xs text-muted-foreground">{option.description}</p>}
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          aria-label={`选择 ${option.label}`}
+          disabled={disabled}
+          onClick={onSelect}
+        >
+          选择
+        </Button>
+      </div>
+      {hotel && (
+        <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+          {hotel.name && <p className="text-sm text-foreground">{hotel.name}</p>}
+          {hotel.address && <p>{hotel.address}</p>}
+          <p>
+            {(hotel.price_per_night_yuan ?? 0) > 0 ? `¥${hotel.price_per_night_yuan}/晚` : "价格未知"}
+            {typeof hotel.score === "number" ? ` · ${hotel.score} 分` : ""}
+          </p>
+          {booking && (
+            <a className="text-primary underline" href={hotel.booking_url} target="_blank" rel="noopener noreferrer">
+              查看预订
+            </a>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function safeURL(value: string | undefined): value is string {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }

@@ -102,6 +102,41 @@ describe("SharePage", () => {
     expect(screen.getByRole("button", { name: /已复制/ })).toBeInTheDocument();
   });
 
+  it("shows sanitized research without internal fields", async () => {
+    getSharedTrip.mockResolvedValue({
+      ...shared,
+      version: {
+        ...shared.version,
+        research: {
+          accommodation: {
+            mentioned: true,
+            selected: { name: "全季酒店", price_per_night_yuan: 480, price_estimated: true },
+            nights: 1,
+            total_yuan: 480,
+            include_in_budget: true,
+          },
+          guides: [
+            {
+              poi_id: "b1",
+              weight: 1.2,
+              mentions: 2,
+              note: "早上人少",
+              citations: [{ title: "故宫攻略", url: "https://example.com/tip", site: "攻略站" }],
+            },
+          ],
+        },
+      },
+    });
+    renderShare();
+
+    expect(await screen.findByText("全季酒店")).toBeInTheDocument();
+    expect(screen.getByText("早上人少")).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /故宫攻略/ });
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByText("外部摘要，仅供参考。")).toBeInTheDocument();
+    expect(screen.queryByText(/tool_calls/)).not.toBeInTheDocument();
+  });
+
   it("shows a not-found state for revoked or unknown links", async () => {
     getSharedTrip.mockRejectedValue(new ApiError(404, "share_not_found", "分享链接不存在", "req-1"));
     renderShare();

@@ -91,6 +91,55 @@ describe("RunActions", () => {
     await waitFor(() => expect(props.onRunStarted).toHaveBeenCalledWith("run-2"));
   });
 
+  it("resolves a hotel question with server options", async () => {
+    const props = renderActions({
+      researchQuestion: {
+        code: "hotel_unconfirmed",
+        message: "未找到指定酒店",
+        options: [
+          {
+            id: "hotel-1",
+            label: "全季酒店",
+            hotel: { name: "全季酒店", price_per_night_yuan: 480, booking_url: "https://example.com/book" },
+          },
+          { id: "continue_without_lodging", label: "继续但不计住宿" },
+        ],
+      },
+    });
+
+    expect(screen.getByText("确认住宿")).toBeInTheDocument();
+    expect(screen.getAllByText("全季酒店").length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole("button", { name: "选择 继续但不计住宿" }));
+    await waitFor(() =>
+      expect(resumeRun).toHaveBeenCalledWith("run-1", {
+        action: "resolve_research",
+        research_choice: { option_id: "continue_without_lodging" },
+      }),
+    );
+    await waitFor(() => expect(props.onActionComplete).toHaveBeenCalled());
+  });
+
+  it("passes the selected server hotel through unchanged", async () => {
+    const hotel = { name: "全季酒店", lat: 39.8, lng: 116.3, price_per_night_yuan: 480 };
+    renderActions({
+      researchQuestion: {
+        code: "hotel_unconfirmed",
+        message: "未找到指定酒店",
+        options: [{ id: "hotel-1", label: "全季酒店", hotel }],
+      },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "选择 全季酒店" }));
+
+    await waitFor(() =>
+      expect(resumeRun).toHaveBeenCalledWith("run-1", {
+        action: "resolve_research",
+        research_choice: { option_id: "hotel-1", hotel },
+      }),
+    );
+  });
+
   it("renders nothing while the agent is still working", () => {
     const { container } = render(<RunActions status="running" tripID="trip-1" runID="run-1" missing={[]} proposal={null} baseVersion={3} onRunStarted={vi.fn()} onActionComplete={vi.fn()} />, {
       wrapper: ({ children }) => <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>,

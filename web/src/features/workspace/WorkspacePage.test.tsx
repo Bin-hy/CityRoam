@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -88,6 +89,12 @@ vi.mock("@/hooks/useRunStream", () => ({
   useRunStream: () => fixture.trace,
 }));
 
+vi.mock("@/hooks/useMeta", () => ({
+  useMeta: () => ({
+    data: { plugins: { hotels: { enabled: true }, guides: { enabled: true } } },
+  }),
+}));
+
 vi.mock("@/features/timeline/ItineraryTimeline", () => ({
   ItineraryTimeline: ({
     selectedBlockID,
@@ -135,12 +142,15 @@ vi.mock("@/features/map/TripMap", () => ({
 }));
 
 function renderWorkspace() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter initialEntries={["/trips/trip-1"]}>
-      <Routes>
-        <Route path="/trips/:tripId" element={<WorkspacePage />} />
-      </Routes>
-    </MemoryRouter>,
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/trips/trip-1"]}>
+        <Routes>
+          <Route path="/trips/:tripId" element={<WorkspacePage />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -164,7 +174,25 @@ function setDesktop(desktop: boolean) {
 describe("WorkspacePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete (fixture.trip.latest_version as { research?: unknown }).research;
     setDesktop(true);
+  });
+
+  it("keeps legacy versions without research compatible", () => {
+    renderWorkspace();
+    expect(screen.getByText("本次未识别到住宿需求。")).toBeInTheDocument();
+  });
+
+  it("renders research from the latest version", () => {
+    (fixture.trip.latest_version as { research?: unknown }).research = {
+      accommodation: { mentioned: true, selected: { name: "全季酒店", price_per_night_yuan: 480 } },
+      guides: [{ poi_id: "b-1", note: "故宫早上人少", citations: [{ title: "故宫攻略", url: "https://example.com" }] }],
+    };
+    renderWorkspace();
+
+    expect(screen.getByText("全季酒店")).toBeInTheDocument();
+    expect(screen.getByText("故宫早上人少")).toBeInTheDocument();
+    expect(screen.getByText("故宫攻略")).toBeInTheDocument();
   });
 
   it("links the timeline and the map through one selection", async () => {

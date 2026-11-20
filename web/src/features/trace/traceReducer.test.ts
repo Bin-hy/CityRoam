@@ -49,6 +49,40 @@ describe("traceReducer", () => {
     expect(state.entries.map((entry) => entry.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
+  it("tracks research events and stores the pending question", () => {
+    let state = initialTraceState();
+    state = apply(state, { seq: 1, type: "research.started", payload: { tools: ["search_hotels", "search_travel_notes"] } });
+    expect(state.stage).toBe("research");
+    expect(state.entries[0].detail).toBe("2 个工具");
+
+    state = apply(state, {
+      seq: 2,
+      type: "plugin.tool_completed",
+      payload: { name: "search_hotels", status: "ok", latency_ms: 120, result_count: 3 },
+    });
+    expect(state.entries[1].title).toBe("search_hotels 完成");
+    expect(state.entries[1].detail).toBe("120ms · 3 条结果");
+
+    const question = {
+      code: "hotel_unconfirmed",
+      message: "未找到指定酒店",
+      options: [{ id: "continue_without_lodging", label: "继续但不计住宿" }],
+    };
+    state = apply(state, { seq: 3, type: "research.needs_input", payload: { question } });
+    expect(state.researchQuestion?.code).toBe("hotel_unconfirmed");
+
+    state = apply(state, {
+      seq: 4,
+      type: "run.awaiting_user",
+      payload: { stage: "research", research_question: question },
+    });
+    expect(state.stage).toBe("research");
+    expect(state.researchQuestion?.options[0].id).toBe("continue_without_lodging");
+
+    state = traceReducer(state, { type: "reset", lastSeq: 4 });
+    expect(state.researchQuestion).toBeNull();
+  });
+
   it("moves to awaiting and keeps the proposal", () => {
     const state = apply(initialTraceState(), {
       seq: 4,

@@ -4,6 +4,7 @@ import type {
   CreatedTrip,
   CreateTripRequest,
   PlanVersion,
+  ReplanRequest,
   ResumeRequest,
   RunAction,
   Share,
@@ -48,6 +49,13 @@ export function restorePlanVersion(tripID: string, seq: number): Promise<PlanVer
 
 export function createAdjustment(tripID: string, body: AdjustmentRequest): Promise<RunAction> {
   return apiRequest<RunAction>(`/api/trips/${encodeURIComponent(tripID)}/adjustments`, {
+    method: "POST",
+    body,
+  });
+}
+
+export function replanTrip(tripID: string, body: ReplanRequest): Promise<RunAction> {
+  return apiRequest<RunAction>(`/api/trips/${encodeURIComponent(tripID)}/replan`, {
     method: "POST",
     body,
   });

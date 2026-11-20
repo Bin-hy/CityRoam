@@ -1,3 +1,5 @@
+import { parseResearchQuestion, type ResearchQuestion } from "@/features/research/types";
+
 export type RunStatus =
   | "idle"
   | "queued"
@@ -41,6 +43,7 @@ export interface TraceState {
   missing: string[];
   error: { code: string; message: string } | null;
   proposal: Record<string, unknown> | null;
+  researchQuestion: ResearchQuestion | null;
 }
 
 export type TraceAction = { type: "reset"; lastSeq?: number } | { type: "event"; event: RunEvent };
@@ -51,6 +54,7 @@ export const stageLabels: Record<string, string> = {
   admit: "受理",
   parse: "解析需求",
   retrieve: "检索候选",
+  research: "研究攻略与住宿",
   draft: "生成草稿",
   schedule: "时间调度",
   validate: "约束校验",
@@ -75,6 +79,7 @@ export function initialTraceState(lastSeq = 0): TraceState {
     missing: [],
     error: null,
     proposal: null,
+    researchQuestion: null,
   };
 }
 
@@ -110,6 +115,19 @@ export function traceReducer(state: TraceState, action: TraceAction): TraceState
     case "candidate.retrieved":
       next.stage = "draft";
       break;
+    case "research.started":
+      next.stage = "research";
+      break;
+    case "research.completed":
+      next.stage = "draft";
+      break;
+    case "research.degraded":
+      next.stage = "draft";
+      break;
+    case "research.needs_input":
+      next.stage = "research";
+      next.researchQuestion = parseResearchQuestion(event.payload.question) ?? state.researchQuestion;
+      break;
     case "plan.drafted":
       next.stage = "schedule";
       break;
@@ -133,6 +151,7 @@ export function traceReducer(state: TraceState, action: TraceAction): TraceState
       next.stage = string(event.payload.stage) || "present";
       next.missing = strings(event.payload.missing);
       next.proposal = object(event.payload.proposal);
+      next.researchQuestion = parseResearchQuestion(event.payload.research_question);
       break;
     case "run.completed":
       next.status = "completed";
@@ -177,6 +196,51 @@ export function describe(event: RunEvent): TraceEntry {
       };
     case "plan.drafted":
       return { ...base, title: "草稿生成", level: "info" };
+    case "research.started":
+      return {
+        ...base,
+        title: "开始研究攻略与住宿",
+        detail: countDetail(event.payload.tools, "个工具"),
+        level: "info",
+      };
+    case "plugin.tool_called":
+      return {
+        ...base,
+        title: `调用 ${string(event.payload.name) || "外部工具"}`,
+        detail: string(event.payload.provider) || undefined,
+        level: "info",
+      };
+    case "plugin.tool_completed": {
+      const failed = string(event.payload.status) === "error";
+      const parts = [
+        integer(event.payload.latency_ms) > 0 ? `${integer(event.payload.latency_ms)}ms` : "",
+        integer(event.payload.result_count) > 0 ? `${integer(event.payload.result_count)} 条结果` : "",
+      ].filter(Boolean);
+      return {
+        ...base,
+        title: `${string(event.payload.name) || "外部工具"}${failed ? " 失败" : " 完成"}`,
+        detail: parts.join(" · ") || undefined,
+        level: failed ? "warning" : "success",
+      };
+    }
+    case "research.completed":
+      return {
+        ...base,
+        title: "研究完成",
+        detail: [string(event.payload.hotel), `${integer(event.payload.guide_matches)} 条攻略`]
+          .filter((item) => item && item !== "0 条攻略")
+          .join(" · ") || undefined,
+        level: string(event.payload.status) === "degraded" ? "warning" : "success",
+      };
+    case "research.degraded":
+      return {
+        ...base,
+        title: "研究降级",
+        detail: string(event.payload.reason) || "部分外部数据不可用",
+        level: "warning",
+      };
+    case "research.needs_input":
+      return { ...base, title: "需要确认住宿", detail: "请选择酒店或继续不带住宿", level: "warning" };
     case "validation.result": {
       const blocking = integer(event.payload.blocking);
       const warnings = integer(event.payload.warnings);
@@ -226,6 +290,10 @@ function cityDays(raw: unknown): string | undefined {
 
 function missingLabel(field: string): string {
   return field === "city" ? "城市" : field === "days" ? "天数" : field;
+}
+
+function countDetail(raw: unknown, suffix: string): string | undefined {
+  return Array.isArray(raw) && raw.length > 0 ? `${raw.length} ${suffix}` : undefined;
 }
 
 function violations(raw: unknown): ViolationView[] {

@@ -5,10 +5,12 @@ export interface BudgetBreakdown {
   tickets: number;
   meals: number;
   transit: number;
+  lodging: number;
   total: number;
   poiCount: number;
   walkingKM: number;
   estimated: boolean;
+  hasLodging: boolean;
 }
 
 export function budgetBreakdown(itinerary: Itinerary): BudgetBreakdown {
@@ -41,14 +43,17 @@ export function budgetBreakdown(itinerary: Itinerary): BudgetBreakdown {
     }
   }
 
+  const lodging = itinerary.totals.lodging_yuan ?? 0;
   return {
     tickets,
     meals,
     transit,
-    total,
+    lodging,
+    total: total + lodging,
     poiCount,
     walkingKM: itinerary.totals.walking_km,
     estimated,
+    hasLodging: lodging > 0,
   };
 }
 
@@ -62,6 +67,9 @@ export function BudgetPanel({ itinerary }: { itinerary: Itinerary | null }) {
     ["餐饮", budget.meals],
     ["交通", budget.transit],
   ];
+  if (budget.hasLodging) {
+    rows.push(["住宿", budget.lodging]);
+  }
 
   return (
     <div className="space-y-3">
@@ -82,8 +90,11 @@ export function BudgetPanel({ itinerary }: { itinerary: Itinerary | null }) {
         <span>·</span>
         <span>步行 {budget.walkingKM.toFixed(1)} km</span>
         {budget.estimated && <Badge variant="warning">含估算交通</Badge>}
+        {budget.hasLodging && <Badge variant="warning">住宿估算</Badge>}
       </div>
-      <p className="text-xs text-muted-foreground">价格为估算，门票以景区实际公示为准。</p>
+      <p className="text-xs text-muted-foreground">
+        {budget.hasLodging ? "价格估算、库存不保证；门票以景区实际公示为准。" : "价格为估算，门票以景区实际公示为准。"}
+      </p>
     </div>
   );
 }

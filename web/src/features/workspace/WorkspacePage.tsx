@@ -7,10 +7,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ErrorState } from "@/components/StateMessage";
+import { useMeta } from "@/hooks/useMeta";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useRunStream } from "@/hooks/useRunStream";
 import { useTrip } from "@/features/trips/useTrip";
 import { parseItinerary } from "@/features/itinerary/types";
+import { parseResearch } from "@/features/research/types";
+import { ResearchPanel } from "@/features/research/ResearchPanel";
+import { BudgetModeToggle } from "@/features/research/BudgetModeToggle";
 import { RunTrace } from "@/features/trace/RunTrace";
 import { stageLabels, type RunStatus } from "@/features/trace/traceReducer";
 import { ItineraryTimeline } from "@/features/timeline/ItineraryTimeline";
@@ -27,11 +31,21 @@ export function WorkspacePage() {
   const location = useLocation();
   const routeRunID = (location.state as { runId?: string } | null)?.runId;
   const tripQuery = useTrip(tripId);
+  const metaQuery = useMeta();
   const trip = tripQuery.data;
   const [overrideRunID, setOverrideRunID] = useState<string | null>(null);
   const runID = overrideRunID ?? routeRunID ?? trip?.latest_run?.id;
   const trace = useRunStream(runID, { enabled: Boolean(runID) });
   const itinerary = useMemo(() => parseItinerary(trip?.latest_version?.plan), [trip?.latest_version?.plan]);
+  const poiNames = useMemo(() => {
+    const names: Record<string, string> = {};
+    for (const day of itinerary?.days ?? []) {
+      for (const block of day.blocks) {
+        if (block.type === "poi" && block.poi_id) names[block.poi_id] = block.title;
+      }
+    }
+    return names;
+  }, [itinerary]);
   const [selectedBlockID, setSelectedBlockID] = useState<string | null>(null);
   const isDesktop = useMediaQuery("(min-width: 1024px)");
 
@@ -74,6 +88,29 @@ export function WorkspacePage() {
         ? trace.status
         : ((tripStatus ?? "idle") as RunStatus);
   const stage = trace.lastSeq > 0 && !tripTerminal ? trace.stage : (trip.latest_run?.stage ?? trace.stage);
+  const research = parseResearch(trip.latest_version?.research);
+  const constraints = (trip.constraints ?? {}) as Record<string, unknown>;
+  const lodging = (constraints.lodging ?? {}) as Record<string, unknown>;
+  const budget = (constraints.budget ?? {}) as Record<string, unknown>;
+  const includeLodging = typeof budget.include_lodging === "boolean" ? budget.include_lodging : true;
+  const hasLodging = (itinerary?.totals.lodging_yuan ?? 0) > 0;
+
+  const researchCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle>研究与住宿</CardTitle>
+        <CardDescription>住宿建议与外部攻略摘要，仅供参考。</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ResearchPanel
+          research={research}
+          plugins={metaQuery.data?.plugins}
+          loading={status === "running" && trace.stage === "research"}
+          poiNames={poiNames}
+        />
+      </CardContent>
+    </Card>
+  );
 
   const mapCard = (
     <Card>
@@ -155,6 +192,7 @@ export function WorkspacePage() {
             status={status}
             missing={trace.missing}
             proposal={trace.proposal}
+            researchQuestion={trace.researchQuestion}
             baseVersion={trip.latest_version?.seq ?? null}
             onRunStarted={setOverrideRunID}
             onActionComplete={() => void tripQuery.refetch()}
@@ -179,16 +217,30 @@ export function WorkspacePage() {
               </TabsContent>
             </Tabs>
           )}
+          {!isDesktop && researchCard}
         </section>
 
         <aside className="order-3 space-y-4">
+          {isDesktop && researchCard}
           <Card>
             <CardHeader>
               <CardTitle>预算</CardTitle>
-              <CardDescription>门票、餐饮、交通与总计。</CardDescription>
+              <CardDescription>门票、餐饮、交通、住宿与总计。</CardDescription>
             </CardHeader>
             <CardContent>
               <BudgetPanel itinerary={itinerary} />
+              {trip.latest_version && (
+                <BudgetModeToggle
+                  tripID={trip.id}
+                  baseVersion={trip.latest_version.seq}
+                  constraints={constraints}
+                  lodgingMentioned={lodging.mentioned === true}
+                  hasLodging={hasLodging}
+                  includeLodging={includeLodging}
+                  onRunStarted={setOverrideRunID}
+                  onReplanned={() => void tripQuery.refetch()}
+                />
+              )}
             </CardContent>
           </Card>
           <Card>

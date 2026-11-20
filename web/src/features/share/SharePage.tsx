@@ -11,6 +11,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { BudgetPanel } from "@/features/budget/BudgetPanel";
 import { parseItinerary } from "@/features/itinerary/types";
+import { ResearchPanel } from "@/features/research/ResearchPanel";
+import { parseResearch } from "@/features/research/types";
 import { ItineraryTimeline } from "@/features/timeline/ItineraryTimeline";
 import { itineraryToPlainText } from "./plainText";
 
@@ -66,6 +68,13 @@ export function SharePage() {
 
   const shared = shareQuery.data;
   const itinerary = parseItinerary(shared.version.plan);
+  const research = parseResearch(shared.version.research);
+  const poiNames: Record<string, string> = {};
+  for (const day of itinerary?.days ?? []) {
+    for (const block of day.blocks) {
+      if (block.type === "poi" && block.poi_id) poiNames[block.poi_id] = block.title;
+    }
+  }
   const title = itinerary ? `${itinerary.city === "beijing" || !itinerary.city ? "北京" : itinerary.city} · ${itinerary.days.length} 天` : "分享的行程";
 
   async function handleCopy() {
@@ -116,6 +125,18 @@ export function SharePage() {
         </section>
 
         <aside className="space-y-4">
+          {research && (
+            <Card>
+              <CardHeader>
+                <CardTitle>研究与住宿</CardTitle>
+                <CardDescription>住宿建议与外部攻略摘要，仅供参考。</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResearchPanel research={research} poiNames={poiNames} />
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle>预算</CardTitle>

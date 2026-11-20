@@ -50,6 +50,21 @@ describe("BudgetPanel", () => {
     expect(screen.getByText(/价格为估算/)).toBeInTheDocument();
   });
 
+  it("adds the lodging total from itinerary totals", () => {
+    const withLodging: Itinerary = {
+      ...itinerary,
+      totals: { ...itinerary.totals, lodging_yuan: 960 },
+    };
+    const budget = budgetBreakdown(withLodging);
+
+    expect(budget).toMatchObject({ tickets: 60, meals: 40, transit: 4, lodging: 960, total: 1064, hasLodging: true });
+    render(<BudgetPanel itinerary={withLodging} />);
+    expect(screen.getByText("住宿").nextSibling).toHaveTextContent("¥960");
+    expect(screen.getByText("总计").nextSibling).toHaveTextContent("¥1064");
+    expect(screen.getByText("住宿估算")).toBeInTheDocument();
+    expect(screen.getByText(/库存不保证/)).toBeInTheDocument();
+  });
+
   it("shows an empty state", () => {
     render(<BudgetPanel itinerary={null} />);
     expect(screen.getByText("暂无预算。")).toBeInTheDocument();
