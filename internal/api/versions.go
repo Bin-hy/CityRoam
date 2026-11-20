@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -200,6 +201,9 @@ func handleListVersions(deps Deps) http.HandlerFunc {
 		if versions == nil {
 			versions = []repo.PlanVersion{}
 		}
+		for index := range versions {
+			versions[index].Research = normalizeVersionResearch(versions[index].Research)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"versions": versions})
 	}
 }
@@ -220,8 +224,19 @@ func handleGetVersion(deps Deps) http.HandlerFunc {
 			WriteError(w, r, errInternal(err))
 			return
 		}
+		version.Research = normalizeVersionResearch(version.Research)
 		writeJSON(w, http.StatusOK, version)
 	}
+}
+
+// normalizeVersionResearch keeps old rows with an empty research column from
+// serializing as null, so clients can always treat it as an object.
+func normalizeVersionResearch(raw json.RawMessage) json.RawMessage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return json.RawMessage(`{}`)
+	}
+	return raw
 }
 
 func handleRestoreVersion(deps Deps) http.HandlerFunc {

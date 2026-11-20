@@ -68,6 +68,14 @@ func (s *Store) DeleteExpiredPluginCache(ctx context.Context) error {
 	return s.q.DeleteExpiredPluginCache(ctx)
 }
 
+func (s *Store) InsertToolCall(ctx context.Context, arg InsertToolCallParams) (ToolCall, error) {
+	return s.q.InsertToolCall(ctx, arg)
+}
+
+func (s *Store) InsertEvidence(ctx context.Context, arg InsertEvidenceParams) (Evidence, error) {
+	return s.q.InsertEvidence(ctx, arg)
+}
+
 func (s *Store) GetTripByRequestID(ctx context.Context, requestID string) (Trip, error) {
 	return s.q.GetTripByRequestID(ctx, &requestID)
 }

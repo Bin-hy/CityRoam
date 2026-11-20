@@ -366,7 +366,7 @@ func TestGraphRequiresState(t *testing.T) {
 	}
 }
 
-func TestTripStateRoundtrip(t *testing.T) {
+func TestTripStateRoundTrip(t *testing.T) {
 	snapshot := VersionSnapshot{
 		Seq:          2,
 		Plan:         graphPlan(),
@@ -398,8 +398,20 @@ func TestTripStateRoundtrip(t *testing.T) {
 		Snapshot:       &snapshot,
 		Previous:       &best,
 		PreviousSeq:    1,
-		Status:         StatusAwaitingUser,
-		Error:          &RunError{Code: "event_failed", Message: "db down"},
+		Research: &domain.ResearchBrief{
+			Status:        domain.ResearchOK,
+			Accommodation: &domain.AccommodationBrief{Mentioned: true, AnchorDays: []int{0}},
+			Guides:        []domain.GuideSignal{{POIID: "poi-0", Weight: 0.6}},
+		},
+		ResearchQuestion: &domain.ResearchQuestion{
+			Code:    "hotel_unconfirmed",
+			Message: "未找到指定酒店",
+			Options: []domain.ResearchOption{{ID: "continue_without_lodging", Label: "不带住宿继续"}},
+		},
+		ResolvedHotel:   &domain.Hotel{ID: "h1", Name: "测试酒店"},
+		ConstraintPatch: &domain.ConstraintSet{City: "beijing", Days: 1},
+		Status:          StatusAwaitingUser,
+		Error:           &RunError{Code: "event_failed", Message: "db down"},
 	}
 
 	encoded, err := state.Encode()

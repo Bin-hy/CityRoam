@@ -347,3 +347,198 @@ func TestAdjustments(t *testing.T) {
 		}
 	})
 }
+
+func TestReplan(t *testing.T) {
+	replanBody := func(tripID string, requestID string) string {
+		return `{"base_version":1,"constraints":{"city":"beijing","days":1,"budget":{"total_yuan":800,"include_lodging":false}},"client_request_id":"` + requestID + `"}`
+	}
+
+	t.Run("creates a replan run carrying the full patch", func(t *testing.T) {
+		store, trip, _ := versionFixture(t, versionPlan(30))
+		runner := &fakeRunner{}
+		router := tripRouter(store, runner)
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/trips/"+trip.ID+"/replan", strings.NewReader(replanBody(trip.ID, "replan-1"))))
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		var created adjustmentResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if created.RunID == "" || created.EventsURL != "/api/runs/"+created.RunID+"/events" {
+			t.Fatalf("body = %+v", created)
+		}
+		if strings.Contains(rec.Body.String(), "constraints") {
+			t.Fatalf("response leaks constraints: %s", rec.Body.String())
+		}
+
+		run := store.runs[trip.ID][0]
+		if run.ID != created.RunID || run.Mode != "replan" || run.Stage != "parse" || run.Status != agent.StatusQueued {
+			t.Fatalf("run = %+v", run)
+		}
+		if run.BaseVersionID == nil || *run.BaseVersionID != "vx" {
+			t.Fatalf("base version = %v", run.BaseVersionID)
+		}
+		if len(runner.started) != 1 || runner.started[0] != run.ID || runner.keys[0] != "replan-1" {
+			t.Fatalf("runner = %+v %+v", runner.started, runner.keys)
+		}
+
+		state, err := agent.DecodeTripState(run.State)
+		if err != nil {
+			t.Fatalf("decode state: %v", err)
+		}
+		if state.Mode != "replan" || state.PreviousSeq != 1 || state.Previous == nil {
+			t.Fatalf("state = %+v", state)
+		}
+		if state.ConstraintPatch == nil || state.ConstraintPatch.Days != 1 {
+			t.Fatalf("patch = %+v", state.ConstraintPatch)
+		}
+		if state.ConstraintPatch.Budget.IncludeLodging == nil || *state.ConstraintPatch.Budget.IncludeLodging {
+			t.Fatalf("include lodging = %v", state.ConstraintPatch.Budget.IncludeLodging)
+		}
+		if state.Constraints.City != "beijing" || state.Input == "" {
+			t.Fatalf("state = %+v", state)
+		}
+		if len(state.Plan.Days) != 0 {
+			t.Fatalf("replan must not reuse the base plan as the draft: %+v", state.Plan)
+		}
+	})
+
+	t.Run("returns the existing run for a repeated request id", func(t *testing.T) {
+		store, trip, _ := versionFixture(t, versionPlan(30))
+		runner := &fakeRunner{}
+		router := tripRouter(store, runner)
+		body := replanBody(trip.ID, "replan-2")
+
+		first := httptest.NewRecorder()
+		router.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/api/trips/"+trip.ID+"/replan", strings.NewReader(body)))
+		second := httptest.NewRecorder()
+		router.ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/api/trips/"+trip.ID+"/replan", strings.NewReader(body)))
+		if first.Code != http.StatusAccepted || second.Code != http.StatusAccepted {
+			t.Fatalf("status = %d/%d", first.Code, second.Code)
+		}
+		var firstBody, secondBody adjustmentResponse
+		_ = json.Unmarshal(first.Body.Bytes(), &firstBody)
+		_ = json.Unmarshal(second.Body.Bytes(), &secondBody)
+		if firstBody.RunID != secondBody.RunID {
+			t.Fatalf("runs = %s/%s", firstBody.RunID, secondBody.RunID)
+		}
+		if len(runner.started) != 1 || len(store.runs[trip.ID]) != 2 {
+			t.Fatalf("started = %v runs = %+v", runner.started, store.runs[trip.ID])
+		}
+	})
+
+	t.Run("rejects invalid bodies", func(t *testing.T) {
+		store, trip, _ := versionFixture(t, versionPlan(30))
+		router := tripRouter(store, &fakeRunner{})
+
+		cases := []struct {
+			name   string
+			body   string
+			status int
+		}{
+			{"missing base", `{"constraints":{"city":"beijing","days":1}}`, http.StatusBadRequest},
+			{"missing city", `{"base_version":1,"constraints":{"days":1}}`, http.StatusBadRequest},
+			{"unsupported city", `{"base_version":1,"constraints":{"city":"shanghai","days":1}}`, http.StatusBadRequest},
+			{"missing days", `{"base_version":1,"constraints":{"city":"beijing"}}`, http.StatusBadRequest},
+			{"too many days", `{"base_version":1,"constraints":{"city":"beijing","days":9}}`, http.StatusBadRequest},
+			{"unknown field", `{"base_version":1,"constraints":{"city":"beijing","days":1,"budget":{"total_yuan":800,"include_lodging":false,"mystery":1}}}`, http.StatusBadRequest},
+			{"bad include_lodging type", `{"base_version":1,"constraints":{"city":"beijing","days":1,"budget":{"include_lodging":"no"}}}`, http.StatusBadRequest},
+			{"oversized body", `{"base_version":1,"constraints":{"city":"beijing","days":1},"client_request_id":"` + strings.Repeat("a", 70000) + `"}`, http.StatusRequestEntityTooLarge},
+			{"unknown version", `{"base_version":9,"constraints":{"city":"beijing","days":1}}`, http.StatusNotFound},
+		}
+		for _, tc := range cases {
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/trips/"+trip.ID+"/replan", strings.NewReader(tc.body)))
+			if rec.Code != tc.status {
+				t.Fatalf("%s: status = %d body=%s", tc.name, rec.Code, rec.Body.String())
+			}
+		}
+		if len(store.runs[trip.ID]) != 1 {
+			t.Fatalf("invalid replans created runs: %+v", store.runs[trip.ID])
+		}
+	})
+
+	t.Run("rejects a request id bound to another run", func(t *testing.T) {
+		store, trip, _ := versionFixture(t, versionPlan(30))
+		requestID := "shared-replan"
+		if _, _, _, err := store.CreateTripAndRun(context.Background(), repo.CreateTripParams{
+			City: "beijing", Days: 1, Status: "planning", RequestID: &requestID,
+		}, repo.CreateRunParams{Mode: "initial", Status: "awaiting_user", Stage: "present", RequestID: &requestID}); err != nil {
+			t.Fatalf("create other trip: %v", err)
+		}
+		router := tripRouter(store, &fakeRunner{})
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/trips/"+trip.ID+"/replan", strings.NewReader(replanBody(trip.ID, requestID))))
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+func researchRaw(t *testing.T) json.RawMessage {
+	t.Helper()
+	return json.RawMessage(`{
+		"status":"ok",
+		"accommodation":{"mentioned":true,"specified":["全季"],"selected":{"id":"h1","name":"测试酒店","address":"东城区","lat":39.8,"lng":116.3,"price_per_night_yuan":500,"price_estimated":true,"booking_url":"https://secret.example.com/book","provider":"flyai","fetched_at":"2026-11-19T10:00:00Z"},"anchor_days":[0],"nights":1,"nightly_yuan":500,"total_yuan":500,"price_estimated":true,"include_in_budget":true},
+		"guides":[{"poi_id":"poi-1","weight":0.7,"mentions":2,"note":"攻略推荐","citations":[{"title":"北京攻略","url":"https://example.com/g","site":"小红书","authority":4}]}],
+		"notes":["外部摘要仅供参考"],
+		"warnings":["价格可能变化"],
+		"tool_calls":3,
+		"duration_ms":1234,
+		"debug":{"sidecar_url":"http://localhost:9999/private","tool_calls":[{"id":"call-secret"}]}
+	}`)
+}
+
+func TestVersionsResearch(t *testing.T) {
+	t.Run("versions expose research", func(t *testing.T) {
+		store, trip, _ := versionFixture(t, versionPlan(30), versionPlan(50))
+		store.versions[trip.ID][0].Research = researchRaw(t)
+		router := tripRouter(store, &fakeRunner{})
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/trips/"+trip.ID+"/versions", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		var list struct {
+			Versions []repo.PlanVersion `json:"versions"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatalf("decode list: %v", err)
+		}
+		if len(list.Versions) != 2 {
+			t.Fatalf("versions = %d", len(list.Versions))
+		}
+		if !strings.Contains(string(list.Versions[0].Research), `"status":"ok"`) {
+			t.Fatalf("research = %s", list.Versions[0].Research)
+		}
+		if string(list.Versions[1].Research) != `{}` {
+			t.Fatalf("empty research = %s, want {}", list.Versions[1].Research)
+		}
+
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/trips/"+trip.ID+"/versions/2", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		var version repo.PlanVersion
+		if err := json.Unmarshal(rec.Body.Bytes(), &version); err != nil {
+			t.Fatalf("decode version: %v", err)
+		}
+		if !strings.Contains(string(version.Research), `"tool_calls":3`) {
+			t.Fatalf("workspace version should keep full research: %s", version.Research)
+		}
+
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/trips/"+trip.ID+"/versions/1", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get empty status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"research":{}`) {
+			t.Fatalf("empty research serialized differently: %s", rec.Body.String())
+		}
+	})
+}

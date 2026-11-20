@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"trippilot/internal/domain"
 )
 
 type statusUpdate struct {
@@ -368,4 +369,287 @@ func (b *blockingLLM) GenerateJSON(ctx context.Context, _ string, _ json.RawMess
 	b.once.Do(func() { close(b.started) })
 	<-ctx.Done()
 	return nil, Usage{}, ctx.Err()
+}
+
+func researchQuestionFixture() *domain.ResearchQuestion {
+	return &domain.ResearchQuestion{
+		Code:    "hotel_unconfirmed",
+		Message: "未找到指定酒店",
+		Options: []domain.ResearchOption{
+			{ID: "hotel:h1", Label: "全季酒店", Hotel: &domain.Hotel{ID: "h1", Name: "全季酒店", Lat: 39.9, Lng: 116.4}},
+			{ID: "retry_search", Label: "重新搜索酒店"},
+			{ID: "continue_without_lodging", Label: "继续规划，但不计住宿费用"},
+		},
+	}
+}
+
+func awaitingResearchStore(t *testing.T, state *TripState) *fakeRunStore {
+	t.Helper()
+	raw, err := state.Encode()
+	if err != nil {
+		t.Fatalf("encode state: %v", err)
+	}
+	return newFakeRunStore(RunRecord{
+		ID: state.RunID, TripID: "trip-1", Status: StatusAwaitingUser, Input: state.Input, State: raw,
+	})
+}
+
+func researchAwaitingState() *TripState {
+	return &TripState{
+		RunID:  "run-r",
+		TripID: "trip-1",
+		Input:  "北京两天，住华尔道夫",
+		Status: StatusAwaitingUser,
+		Stage:  "research",
+		Constraints: domain.ConstraintSet{
+			City:    "beijing",
+			Days:    2,
+			Lodging: domain.LodgingConstraint{Mentioned: true, Hotels: []string{"华尔道夫"}},
+			Budget:  domain.BudgetConstraint{TotalYuan: 1200},
+		},
+		ResearchQuestion: researchQuestionFixture(),
+	}
+}
+
+func TestResumeResearch(t *testing.T) {
+	t.Run("requires an awaiting run", func(t *testing.T) {
+		store := newFakeRunStore(runnerRun("run-r", StatusQueued, "北京两天"))
+		runner := newTestRunner(t, store, &eventRecorder{}, &fakeLLM{})
+		err := runner.Resume(context.Background(), "run-r", ResumeAction{
+			Kind: ResumeResearch, ResearchChoice: &ResearchChoice{OptionID: "retry_search"},
+		})
+		if !errors.Is(err, ErrInvalidRunStatus) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("requires a research question", func(t *testing.T) {
+		state := researchAwaitingState()
+		state.ResearchQuestion = nil
+		store := awaitingResearchStore(t, state)
+		runner := newTestRunner(t, store, &eventRecorder{}, &fakeLLM{})
+		err := runner.Resume(context.Background(), "run-r", ResumeAction{
+			Kind: ResumeResearch, ResearchChoice: &ResearchChoice{OptionID: "retry_search"},
+		})
+		if !errors.Is(err, ErrInvalidRunStatus) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+func TestResolveResearchChoice(t *testing.T) {
+	replies := func() []json.RawMessage {
+		return []json.RawMessage{
+			json.RawMessage(`{"city":"北京","days":2,"lodging":{"mentioned":true,"hotels":["华尔道夫"]}}`),
+			json.RawMessage(`{"days":[{"items":[{"poi_id":"poi-0","type":"poi","duration_min":90}]},{"items":[{"poi_id":"poi-1","type":"poi","duration_min":60}]}]}`),
+		}
+	}
+
+	t.Run("selects a hotel and requeues", func(t *testing.T) {
+		store := awaitingResearchStore(t, researchAwaitingState())
+		runner := newTestRunner(t, store, &eventRecorder{}, &fakeLLM{replies: replies()})
+		err := runner.Resume(context.Background(), "run-r", ResumeAction{
+			Kind: ResumeResearch,
+			ResearchChoice: &ResearchChoice{
+				OptionID: "hotel:h1",
+				Hotel:    &domain.Hotel{ID: "h1", Name: "全季酒店", Lat: 39.9, Lng: 116.4},
+			},
+		})
+		if err != nil {
+			t.Fatalf("resume: %v", err)
+		}
+		runner.Wait()
+		state := store.stateOf(t, "run-r")
+		if state.ResolvedHotel == nil || state.ResolvedHotel.ID != "h1" {
+			t.Fatalf("resolved hotel = %+v", state.ResolvedHotel)
+		}
+		if state.ResearchQuestion != nil {
+			t.Fatalf("question = %+v, want nil", state.ResearchQuestion)
+		}
+		if state.Snapshot == nil || store.statusOf("run-r") != StatusAwaitingUser {
+			t.Fatalf("state = %+v status = %s", state, store.statusOf("run-r"))
+		}
+	})
+
+	t.Run("continue without lodging disables it", func(t *testing.T) {
+		store := awaitingResearchStore(t, researchAwaitingState())
+		runner := newTestRunner(t, store, &eventRecorder{}, &fakeLLM{replies: replies()})
+		err := runner.Resume(context.Background(), "run-r", ResumeAction{
+			Kind:           ResumeResearch,
+			ResearchChoice: &ResearchChoice{OptionID: "continue_without_lodging"},
+		})
+		if err != nil {
+			t.Fatalf("resume: %v", err)
+		}
+		runner.Wait()
+		state := store.stateOf(t, "run-r")
+		if state.ConstraintPatch == nil {
+			t.Fatal("constraint patch = nil")
+		}
+		if state.ConstraintPatch.Lodging.Mentioned {
+			t.Fatal("patch lodging still mentioned")
+		}
+		if state.ConstraintPatch.Budget.IncludeLodging == nil || *state.ConstraintPatch.Budget.IncludeLodging {
+			t.Fatalf("include_lodging = %v, want false", state.ConstraintPatch.Budget.IncludeLodging)
+		}
+		if state.Constraints.Lodging.Mentioned || state.Constraints.LodgingIncluded() {
+			t.Fatalf("merged constraints = %+v, want lodging off", state.Constraints)
+		}
+		if state.ResolvedHotel != nil {
+			t.Fatalf("resolved hotel = %+v, want nil", state.ResolvedHotel)
+		}
+	})
+
+	t.Run("retry search clears prior selection", func(t *testing.T) {
+		state := researchAwaitingState()
+		state.ResolvedHotel = &domain.Hotel{ID: "old", Name: "旧酒店"}
+		store := awaitingResearchStore(t, state)
+		runner := newTestRunner(t, store, &eventRecorder{}, &fakeLLM{replies: replies()})
+		if err := runner.Resume(context.Background(), "run-r", ResumeAction{
+			Kind: ResumeResearch, ResearchChoice: &ResearchChoice{OptionID: "retry_search"},
+		}); err != nil {
+			t.Fatalf("resume: %v", err)
+		}
+		runner.Wait()
+		after := store.stateOf(t, "run-r")
+		if after.ResolvedHotel != nil {
+			t.Fatalf("resolved hotel = %+v, want nil", after.ResolvedHotel)
+		}
+		if after.ResearchQuestion != nil || after.ConstraintPatch != nil {
+			t.Fatalf("state = %+v, want fresh research", after)
+		}
+	})
+
+	t.Run("rejects an unknown option", func(t *testing.T) {
+		store := awaitingResearchStore(t, researchAwaitingState())
+		runner := newTestRunner(t, store, &eventRecorder{}, &fakeLLM{})
+		err := runner.Resume(context.Background(), "run-r", ResumeAction{
+			Kind: ResumeResearch, ResearchChoice: &ResearchChoice{OptionID: "hotel:missing"},
+		})
+		var choiceErr *ResearchChoiceError
+		if !errors.As(err, &choiceErr) || choiceErr.Code != "invalid_research_choice" {
+			t.Fatalf("err = %v", err)
+		}
+		if store.statusOf("run-r") != StatusAwaitingUser {
+			t.Fatalf("status = %s, want awaiting", store.statusOf("run-r"))
+		}
+	})
+
+	t.Run("rejects a hotel that differs from the option", func(t *testing.T) {
+		store := awaitingResearchStore(t, researchAwaitingState())
+		runner := newTestRunner(t, store, &eventRecorder{}, &fakeLLM{})
+		err := runner.Resume(context.Background(), "run-r", ResumeAction{
+			Kind: ResumeResearch,
+			ResearchChoice: &ResearchChoice{
+				OptionID: "hotel:h1",
+				Hotel:    &domain.Hotel{ID: "h1", Name: "伪造酒店", Lat: 39.9, Lng: 116.4},
+			},
+		})
+		var choiceErr *ResearchChoiceError
+		if !errors.As(err, &choiceErr) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+func TestRunnerAwaitingResearch(t *testing.T) {
+	llm := &fakeLLM{reply: json.RawMessage(`{"city":"北京","days":1,"lodging":{"mentioned":true,"hotels":["华尔道夫"]}}`)}
+	hotelTool := &fakeResearchTool{name: researchHotelTool, fn: func(context.Context, json.RawMessage) (json.RawMessage, error) {
+		return hotelToolOutput(t, domain.Hotel{ID: "h9", Name: "全季酒店", PricePerNightYuan: 300}), nil
+	}}
+	toolLLM := &fakeToolLLM{responses: []ToolCompletion{{Content: briefJSON(t, `{"status":"ok"}`)}}}
+	store := newFakeRunStore(runnerRun("run-q", StatusQueued, "北京一天，住华尔道夫"))
+	events := &eventRecorder{}
+	nodes := graphNodesWithOptions(llm, events, WithToolLLM(toolLLM), WithResearchTools(hotelTool))
+	runner, err := NewRunner(context.Background(), store, events, nodes)
+	if err != nil {
+		t.Fatalf("new runner: %v", err)
+	}
+	if err := runner.Start(context.Background(), "run-q"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	runner.Wait()
+
+	if got := store.statusOf("run-q"); got != StatusAwaitingUser {
+		t.Fatalf("status = %s", got)
+	}
+	state := store.stateOf(t, "run-q")
+	if state.ResearchQuestion == nil || state.ResearchQuestion.Code != "hotel_unconfirmed" {
+		t.Fatalf("question = %+v", state.ResearchQuestion)
+	}
+	if state.Snapshot != nil {
+		t.Fatalf("snapshot = %+v, want none", state.Snapshot)
+	}
+	if len(store.versions) != 0 {
+		t.Fatalf("versions = %d, want 0", len(store.versions))
+	}
+	var awaiting map[string]any
+	for _, event := range events.events {
+		if event.typ == "run.awaiting_user" {
+			awaiting, _ = event.payload.(map[string]any)
+		}
+	}
+	if awaiting == nil {
+		t.Fatalf("awaiting payload missing: %v", events.types())
+	}
+	if awaiting["stage"] != "research" {
+		t.Fatalf("stage = %v, want research", awaiting["stage"])
+	}
+	question, ok := awaiting["research_question"].(*domain.ResearchQuestion)
+	if !ok || question.Code != "hotel_unconfirmed" {
+		t.Fatalf("research_question = %T %+v", awaiting["research_question"], awaiting["research_question"])
+	}
+}
+
+func TestRunnerReplan(t *testing.T) {
+	previous := graphPlan()
+	raw, err := (&TripState{
+		RunID:           "run-replan",
+		TripID:          "trip-1",
+		Mode:            "replan",
+		Input:           "按新的约束重排",
+		Status:          StatusQueued,
+		ConstraintPatch: &domain.ConstraintSet{City: "beijing", Days: 1},
+		Previous:        &previous,
+		PreviousSeq:     2,
+	}).Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	store := newFakeRunStore(RunRecord{
+		ID: "run-replan", TripID: "trip-1", Mode: "replan", Status: StatusQueued, Input: "按新的约束重排", State: raw,
+	})
+	events := &eventRecorder{}
+	llm := &fakeLLM{replies: []json.RawMessage{
+		json.RawMessage(`{"city":"","days":0}`),
+		graphDraftReply(),
+	}}
+	runner := newTestRunner(t, store, events, llm)
+	if err := runner.Start(context.Background(), "run-replan"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	runner.Wait()
+
+	if got := store.statusOf("run-replan"); got != StatusAwaitingUser {
+		t.Fatalf("status = %s", got)
+	}
+	state := store.stateOf(t, "run-replan")
+	if state.Constraints.City != "beijing" || state.Constraints.Days != 1 {
+		t.Fatalf("constraints = %+v", state.Constraints)
+	}
+	if state.Snapshot == nil || state.Snapshot.Seq != 3 || state.Snapshot.Reason != "replan" {
+		t.Fatalf("snapshot = %+v", state.Snapshot)
+	}
+	if state.Proposal != nil {
+		t.Fatalf("proposal = %+v, want none", state.Proposal)
+	}
+	if state.Previous == nil {
+		t.Fatal("previous version lost")
+	}
+	if len(store.versions) != 1 || store.versions[0].status != "draft" {
+		t.Fatalf("versions = %+v", store.versions)
+	}
+	if !containsString(events.types(), "run.started") {
+		t.Fatalf("events = %v", events.types())
+	}
 }

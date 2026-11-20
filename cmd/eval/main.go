@@ -14,10 +14,12 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"trippilot/internal/agent"
+	"trippilot/internal/app"
 	"trippilot/internal/config"
 	"trippilot/internal/eval"
 	"trippilot/internal/events"
 	"trippilot/internal/logging"
+	"trippilot/internal/plugins"
 	"trippilot/internal/repo"
 	"trippilot/internal/runstore"
 	"trippilot/internal/tools"
@@ -33,9 +35,29 @@ func main() {
 
 func run() error {
 	casesDir := flag.String("cases", "eval/cases", "directory with eval case JSON files")
+	pluginCasesDir := flag.String("plugin-cases", "", "directory with plugin eval cases (default eval/cases-plugins when -plugins is set)")
+	pluginsEnabled := flag.Bool("plugins", false, "enable hotel and guide research plugins from the environment")
 	dryRun := flag.Bool("dry-run", false, "load cases and print the table header without calling the LLM")
 	output := flag.String("output", "", "write the Markdown report to this file instead of stdout")
 	flag.Parse()
+
+	casesExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "cases" {
+			casesExplicit = true
+		}
+	})
+	if *pluginsEnabled {
+		switch {
+		case *pluginCasesDir != "":
+			*casesDir = *pluginCasesDir
+		case !casesExplicit:
+			*casesDir = "eval/cases-plugins"
+		}
+	}
+	if *pluginsEnabled && *output == "" {
+		*output = "docs/eval-report-plugins.md"
+	}
 
 	cases, err := eval.LoadCases(*casesDir)
 	if err != nil {
@@ -107,6 +129,26 @@ func run() error {
 		return err
 	}
 	defer broker.Close()
+
+	if *pluginsEnabled {
+		wiring := app.WirePlugins(ctx, cfg, store, broker, logger)
+		for _, status := range wiring.Statuses {
+			if !status.Enabled {
+				logger.Warn("plugin unavailable for eval", "plugin", status.Name, "reason", status.DisabledReason)
+			}
+		}
+		for _, status := range wiring.Statuses {
+			if !status.Enabled {
+				return fmt.Errorf("plugin eval requires %s: %s", status.Name, status.DisabledReason)
+			}
+		}
+		nodeOptions = append(nodeOptions,
+			agent.WithToolLLM(llm),
+			agent.WithResearchTools(wiring.Tools...),
+			agent.WithResearchLimits(cfg.ResearchTimeout, cfg.ResearchMaxToolCalls),
+			agent.WithResearchContext(plugins.WithRun),
+		)
+	}
 
 	nodes := agent.NewNodes(llm, broker, nodeOptions...)
 	runner, err := agent.NewRunner(ctx, runstore.New(store), broker, nodes,

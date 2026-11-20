@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -104,6 +105,77 @@ func TestShare(t *testing.T) {
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, created.URL, nil))
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("status = %d", rec.Code)
+		}
+	})
+}
+
+func TestShareResearch(t *testing.T) {
+	t.Run("sanitizes research to public fields", func(t *testing.T) {
+		store, trip, _ := versionFixture(t, versionPlan(30))
+		store.versions[trip.ID][0].Research = researchRaw(t)
+		router := tripRouter(store, &fakeRunner{})
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/trips/"+trip.ID+"/share", nil))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		var created shareResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, created.URL, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("share status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		raw := rec.Body.String()
+		for _, leak := range []string{"tool_calls", "duration_ms", "sidecar", "secret.example.com", "localhost", `"id":"h1"`, `"provider":"flyai"`, "fetched_at"} {
+			if strings.Contains(raw, leak) {
+				t.Fatalf("share leaks %q: %s", leak, raw)
+			}
+		}
+		for _, want := range []string{`"accommodation"`, `"guides"`, `"notes"`, `"warnings"`, `"攻略推荐"`, `"北京攻略"`, `"测试酒店"`} {
+			if !strings.Contains(raw, want) {
+				t.Fatalf("share missing %q: %s", want, raw)
+			}
+		}
+
+		var shared struct {
+			Version struct {
+				Research map[string]json.RawMessage `json:"research"`
+			} `json:"version"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &shared); err != nil {
+			t.Fatalf("decode share: %v", err)
+		}
+		for key := range shared.Version.Research {
+			switch key {
+			case "accommodation", "guides", "notes", "warnings":
+			default:
+				t.Fatalf("unexpected research key %q", key)
+			}
+		}
+	})
+
+	t.Run("empty research serializes as an object", func(t *testing.T) {
+		store, trip, _ := versionFixture(t, versionPlan(30))
+		router := tripRouter(store, &fakeRunner{})
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/trips/"+trip.ID+"/share", nil))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		var created shareResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, created.URL, nil))
+		if !strings.Contains(rec.Body.String(), `"research":{}`) {
+			t.Fatalf("empty research serialized differently: %s", rec.Body.String())
 		}
 	})
 }

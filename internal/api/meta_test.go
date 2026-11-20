@@ -6,8 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"trippilot/internal/plugins"
 )
 
 func baseRouter(deps Deps) http.Handler {
@@ -86,6 +89,10 @@ func TestMeta(t *testing.T) {
 		RateLimit struct {
 			PerHour int `json:"per_hour"`
 		} `json:"rate_limit"`
+		Plugins struct {
+			Hotels pluginMeta `json:"hotels"`
+			Guides pluginMeta `json:"guides"`
+		} `json:"plugins"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -98,5 +105,54 @@ func TestMeta(t *testing.T) {
 	}
 	if body.RateLimit.PerHour != 10 {
 		t.Fatalf("rate limit = %+v", body.RateLimit)
+	}
+	if body.Plugins.Hotels.Enabled || body.Plugins.Guides.Enabled {
+		t.Fatalf("plugins default enabled: %+v", body.Plugins)
+	}
+	if body.Plugins.Hotels.DisabledReason != "" || body.Plugins.Guides.DisabledReason != "" {
+		t.Fatalf("plugins default reasons: %+v", body.Plugins)
+	}
+}
+
+type pluginMeta struct {
+	Enabled        bool   `json:"enabled"`
+	DisabledReason string `json:"disabled_reason"`
+}
+
+func TestMetaPluginStatuses(t *testing.T) {
+	router := baseRouter(Deps{
+		Version: "1.2.3",
+		PluginStatuses: []plugins.Status{
+			{Name: "hotel", Enabled: true},
+			{Name: "guide", Enabled: false, DisabledReason: "GUIDE_SEARCH_API_KEY is empty"},
+		},
+	})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/meta", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+
+	var body struct {
+		Version string `json:"version"`
+		Plugins struct {
+			Hotels pluginMeta `json:"hotels"`
+			Guides pluginMeta `json:"guides"`
+		} `json:"plugins"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.Plugins.Hotels.Enabled || body.Plugins.Hotels.DisabledReason != "" {
+		t.Fatalf("hotels = %+v", body.Plugins.Hotels)
+	}
+	if body.Plugins.Guides.Enabled || body.Plugins.Guides.DisabledReason == "" {
+		t.Fatalf("guides = %+v", body.Plugins.Guides)
+	}
+	raw := rec.Body.String()
+	for _, leak := range []string{"http://", "https://", "sk-", "API_KEY="} {
+		if strings.Contains(raw, leak) {
+			t.Fatalf("meta leaks %q: %s", leak, raw)
+		}
 	}
 }

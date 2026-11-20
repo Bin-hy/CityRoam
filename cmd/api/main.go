@@ -16,10 +16,12 @@ import (
 
 	"trippilot/internal/agent"
 	"trippilot/internal/api"
+	"trippilot/internal/app"
 	"trippilot/internal/config"
 	"trippilot/internal/eval"
 	"trippilot/internal/events"
 	"trippilot/internal/logging"
+	"trippilot/internal/plugins"
 	"trippilot/internal/repo"
 	"trippilot/internal/runstore"
 	"trippilot/internal/tools"
@@ -102,6 +104,19 @@ func run() error {
 	}
 	defer broker.Close()
 
+	wiring := app.WirePlugins(startupCtx, cfg, store, broker, logger)
+	nodeOptions = append(nodeOptions,
+		agent.WithResearchLimits(cfg.ResearchTimeout, cfg.ResearchMaxToolCalls),
+		agent.WithResearchDisabled(wiring.Disabled...),
+	)
+	if len(wiring.Tools) > 0 {
+		nodeOptions = append(nodeOptions,
+			agent.WithToolLLM(llm),
+			agent.WithResearchTools(wiring.Tools...),
+			agent.WithResearchContext(plugins.WithRun),
+		)
+	}
+
 	nodes := agent.NewNodes(llm, broker, nodeOptions...)
 	runner, err := agent.NewRunner(startupCtx, runstore.New(store), broker, nodes,
 		agent.WithRunnerConcurrency(3),
@@ -126,6 +141,7 @@ func run() error {
 		Store:            store,
 		Runner:           runner,
 		Eval:             newEvalService(store, runner, logger),
+		PluginStatuses:   wiring.Statuses,
 	})
 
 	server := &http.Server{

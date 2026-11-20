@@ -192,6 +192,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trips/{tripID}/replan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tripID: components["parameters"]["TripID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-run the pipeline with a full constraint patch from a base version */
+        post: operations["replanTrip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trips/{tripID}/share": {
         parameters: {
             query?: never;
@@ -345,6 +364,14 @@ export interface components {
             rate_limit: {
                 per_hour: number;
             };
+            plugins?: {
+                hotels: components["schemas"]["PluginStatus"];
+                guides: components["schemas"]["PluginStatus"];
+            };
+        };
+        PluginStatus: {
+            enabled: boolean;
+            disabled_reason?: string;
         };
         CreateTripRequest: {
             input: string;
@@ -376,7 +403,7 @@ export interface components {
         RunSummary: {
             id: string;
             /** @enum {string} */
-            mode: "initial" | "adjustment";
+            mode: "initial" | "adjustment" | "replan" | "eval";
             /** @enum {string} */
             status: "queued" | "running" | "awaiting_user" | "completed" | "failed" | "cancelled";
             stage: string;
@@ -409,6 +436,72 @@ export interface components {
             status: "draft" | "accepted" | "superseded";
             /** Format: date-time */
             created_at: string;
+            research?: components["schemas"]["ResearchBrief"];
+        };
+        ResearchBrief: {
+            /** @enum {string} */
+            status?: "ok" | "degraded" | "skipped";
+            accommodation?: components["schemas"]["AccommodationBrief"];
+            guides?: components["schemas"]["GuideSignal"][];
+            notes?: string[];
+            warnings?: string[];
+            tool_calls?: number;
+            duration_ms?: number;
+        };
+        AccommodationBrief: {
+            mentioned?: boolean;
+            specified?: string[];
+            selected?: components["schemas"]["Hotel"];
+            options?: components["schemas"]["Hotel"][];
+            anchor_days?: number[];
+            nights?: number;
+            nightly_yuan?: number;
+            total_yuan?: number;
+            price_estimated?: boolean;
+            include_in_budget?: boolean;
+            reason?: string;
+        };
+        Hotel: {
+            id?: string;
+            name?: string;
+            address?: string;
+            city?: string;
+            lat?: number;
+            lng?: number;
+            star?: number;
+            score?: number | null;
+            price_per_night_yuan?: number;
+            price_estimated?: boolean;
+            booking_url?: string;
+            provider?: string;
+            /** Format: date-time */
+            fetched_at?: string;
+        };
+        GuideSignal: {
+            poi_id?: string;
+            weight?: number;
+            mentions?: number;
+            note?: string;
+            citations?: components["schemas"]["GuideCitation"][];
+        };
+        GuideCitation: {
+            title?: string;
+            url?: string;
+            site?: string;
+            /** Format: date-time */
+            published_at?: string | null;
+            authority?: number;
+        };
+        ResearchQuestion: {
+            code: string;
+            message: string;
+            options: components["schemas"]["ResearchOption"][];
+        };
+        ResearchOption: {
+            id: string;
+            label: string;
+            description?: string;
+            hotel?: components["schemas"]["Hotel"];
         };
         VersionDiff: {
             from: number;
@@ -422,17 +515,29 @@ export interface components {
             base_version: number;
             client_request_id?: string;
         };
+        ReplanRequest: {
+            base_version: number;
+            constraints: {
+                [key: string]: unknown;
+            };
+            client_request_id?: string;
+        };
         RunAccepted: {
             run_id: string;
             events_url: string;
         };
         ResumeRequest: {
             /** @enum {string} */
-            action: "provide_constraints" | "accept" | "reject";
+            action: "provide_constraints" | "accept" | "reject" | "resolve_research";
             input?: string;
             constraints?: {
                 [key: string]: unknown;
             };
+            research_choice?: components["schemas"]["ResearchChoice"];
+        };
+        ResearchChoice: {
+            option_id: string;
+            hotel?: components["schemas"]["Hotel"];
         };
         RunAction: {
             run_id: string;
@@ -768,6 +873,37 @@ export interface operations {
             400: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    replanTrip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tripID: components["parameters"]["TripID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplanRequest"];
+            };
+        };
+        responses: {
+            /** @description Replan run accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunAccepted"];
+                };
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };

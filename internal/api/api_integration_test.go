@@ -155,6 +155,12 @@ func (a runStoreAdapter) SaveVersion(_ context.Context, runID string, snapshot a
 	plan, _ := json.Marshal(snapshot.Plan)
 	constraints, _ := json.Marshal(snapshot.Constraints)
 	violations, _ := json.Marshal(snapshot.Violations)
+	research := json.RawMessage(`{}`)
+	if snapshot.Research != nil {
+		if encoded, err := json.Marshal(snapshot.Research); err == nil {
+			research = encoded
+		}
+	}
 	version := repo.PlanVersion{
 		ID:          fmt.Sprintf("%s-v%d", run.TripID, snapshot.Seq),
 		TripID:      run.TripID,
@@ -165,6 +171,7 @@ func (a runStoreAdapter) SaveVersion(_ context.Context, runID string, snapshot a
 		Violations:  violations,
 		Status:      status,
 		CreatedAt:   time.Unix(1700000200, 0).UTC(),
+		Research:    research,
 	}
 	a.store.versions[run.TripID] = append([]repo.PlanVersion{version}, a.store.versions[run.TripID]...)
 	return nil

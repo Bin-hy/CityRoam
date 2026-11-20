@@ -40,11 +40,31 @@ const (
 	ResumeSupplement ResumeKind = "supplement"
 	ResumeAccept     ResumeKind = "accept"
 	ResumeReject     ResumeKind = "reject"
+	ResumeResearch   ResumeKind = "resolve_research"
 )
 
+type ResearchChoice struct {
+	OptionID string        `json:"option_id"`
+	Hotel    *domain.Hotel `json:"hotel,omitempty"`
+}
+
 type ResumeAction struct {
-	Kind  ResumeKind
-	Input string
+	Kind           ResumeKind
+	Input          string
+	ResearchChoice *ResearchChoice
+}
+
+// ResearchChoiceError reports a client choice that does not match the stored
+// research question so the API can answer with 400 instead of 500.
+type ResearchChoiceError struct {
+	Code    string
+	Message string
+}
+
+func (e *ResearchChoiceError) Error() string { return e.Message }
+
+func invalidResearchChoice(message string) error {
+	return &ResearchChoiceError{Code: "invalid_research_choice", Message: message}
 }
 
 var ErrInvalidRunStatus = errors.New("runner: invalid run status")
@@ -294,9 +314,88 @@ func (r *Runner) Resume(ctx context.Context, runID string, action ResumeAction) 
 		}
 		return nil
 
+	case ResumeResearch:
+		return r.resumeResearch(ctx, runID, state, action)
+
 	default:
 		return fmt.Errorf("runner: unknown resume action %q", action.Kind)
 	}
+}
+
+func (r *Runner) resumeResearch(ctx context.Context, runID string, state *TripState, action ResumeAction) error {
+	question := state.ResearchQuestion
+	if question == nil {
+		return fmt.Errorf("%w: no research question", ErrInvalidRunStatus)
+	}
+	if action.ResearchChoice == nil {
+		return invalidResearchChoice("缺少研究选择")
+	}
+	option, found := researchOption(question, action.ResearchChoice.OptionID)
+	if !found {
+		return invalidResearchChoice("研究选项不存在")
+	}
+
+	switch option.ID {
+	case "continue_without_lodging":
+		patch := state.Constraints
+		patch.Lodging = domain.LodgingConstraint{}
+		includeLodging := false
+		patch.Budget.IncludeLodging = &includeLodging
+		state.ConstraintPatch = &patch
+		state.ResolvedHotel = nil
+	case "retry_search":
+		state.ConstraintPatch = nil
+		state.ResolvedHotel = nil
+	default:
+		if option.Hotel == nil {
+			return invalidResearchChoice("研究选项不是酒店")
+		}
+		if choice := action.ResearchChoice.Hotel; choice != nil && !sameHotel(*choice, *option.Hotel) {
+			return invalidResearchChoice("提交的酒店与选项不一致")
+		}
+		hotel := *option.Hotel
+		state.ResolvedHotel = &hotel
+		state.ConstraintPatch = nil
+	}
+
+	state.Research = nil
+	state.ResearchQuestion = nil
+	state.Candidates = nil
+	state.Draft = domain.DraftPlan{}
+	state.Plan = domain.Itinerary{}
+	state.Violations = nil
+	state.History = nil
+	state.Best = nil
+	state.BestViolations = nil
+	state.StopReason = ""
+	state.Suggestions = nil
+	state.Snapshot = nil
+	state.Status = StatusQueued
+	state.Stage = StatusQueued
+	state.Error = nil
+	if err := r.saveState(ctx, state); err != nil {
+		return err
+	}
+	if err := r.store.UpdateRunStatus(ctx, runID, StatusQueued, StatusQueued); err != nil {
+		return fmt.Errorf("runner: requeue research run: %w", err)
+	}
+	return r.Start(ctx, runID)
+}
+
+func researchOption(question *domain.ResearchQuestion, optionID string) (domain.ResearchOption, bool) {
+	for _, option := range question.Options {
+		if option.ID == optionID {
+			return option, true
+		}
+	}
+	return domain.ResearchOption{}, false
+}
+
+func sameHotel(a, b domain.Hotel) bool {
+	if a.ID != "" && b.ID != "" && a.ID != b.ID {
+		return false
+	}
+	return a.Name == b.Name && a.Lat == b.Lat && a.Lng == b.Lng
 }
 
 // Cancel stops a run immediately and records the terminal state once.
@@ -403,6 +502,9 @@ func (r *Runner) execute(ctx context.Context, state *TripState) {
 		if out.Proposal != nil {
 			stage = "proposal"
 		}
+		if out.ResearchQuestion != nil {
+			stage = "research"
+		}
 	}
 	if err := r.store.UpdateRunStatus(ctx, out.RunID, out.Status, stage); err != nil {
 		r.logger.Error("runner: update awaiting status", "run_id", out.RunID, "error", err)
@@ -414,6 +516,9 @@ func (r *Runner) execute(ctx context.Context, state *TripState) {
 	}
 	if out.Proposal != nil {
 		payload["proposal"] = out.Proposal
+	}
+	if out.ResearchQuestion != nil {
+		payload["research_question"] = out.ResearchQuestion
 	}
 	if err := r.events.Publish(ctx, out.RunID, "run.awaiting_user", payload); err != nil {
 		r.logger.Error("runner: publish awaiting", "run_id", out.RunID, "error", err)

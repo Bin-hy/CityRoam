@@ -11,12 +11,14 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"trippilot/internal/agent"
+	"trippilot/internal/repo"
 )
 
 type resumeRequest struct {
-	Action      string          `json:"action"`
-	Input       string          `json:"input"`
-	Constraints json.RawMessage `json:"constraints"`
+	Action         string                `json:"action"`
+	Input          string                `json:"input"`
+	Constraints    json.RawMessage       `json:"constraints"`
+	ResearchChoice *agent.ResearchChoice `json:"research_choice"`
 }
 
 type runActionResponse struct {
@@ -44,7 +46,18 @@ func handleResumeRun(deps Deps) http.HandlerFunc {
 			WriteError(w, r, err)
 			return
 		}
+		if action.Kind == agent.ResumeResearch {
+			if err := validateResearchResume(run); err != nil {
+				WriteError(w, r, err)
+				return
+			}
+		}
 		if err := deps.Runner.Resume(r.Context(), run.ID, action); err != nil {
+			var choiceErr *agent.ResearchChoiceError
+			if errors.As(err, &choiceErr) {
+				WriteError(w, r, &Error{Status: http.StatusBadRequest, Code: choiceErr.Code, Message: choiceErr.Message})
+				return
+			}
 			if errors.Is(err, agent.ErrInvalidRunStatus) {
 				WriteError(w, r, invalidRunState())
 				return
@@ -102,9 +115,27 @@ func resumeAction(req resumeRequest) (agent.ResumeAction, error) {
 		return agent.ResumeAction{Kind: agent.ResumeAccept}, nil
 	case "reject":
 		return agent.ResumeAction{Kind: agent.ResumeReject}, nil
+	case "resolve_research":
+		if req.ResearchChoice == nil || strings.TrimSpace(req.ResearchChoice.OptionID) == "" {
+			return agent.ResumeAction{}, &Error{Status: http.StatusBadRequest, Code: "invalid_research_choice", Message: "缺少研究选择"}
+		}
+		return agent.ResumeAction{Kind: agent.ResumeResearch, ResearchChoice: req.ResearchChoice}, nil
 	default:
 		return agent.ResumeAction{}, &Error{Status: http.StatusBadRequest, Code: "invalid_action", Message: "不支持的恢复动作"}
 	}
+}
+
+func validateResearchResume(run repo.Run) error {
+	if run.Status != agent.StatusAwaitingUser {
+		return invalidRunState()
+	}
+	if len(run.State) > 0 {
+		state, err := agent.DecodeTripState(run.State)
+		if err == nil && state.ResearchQuestion != nil {
+			return nil
+		}
+	}
+	return &Error{Status: http.StatusConflict, Code: "no_research_question", Message: "当前运行没有待确认的研究问题"}
 }
 
 func validateConstraints(raw json.RawMessage) error {

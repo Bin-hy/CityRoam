@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"trippilot/internal/agent"
+	"trippilot/internal/domain"
 	"trippilot/internal/repo"
 )
 
@@ -206,7 +208,9 @@ func handleGetTrip(deps Deps) http.HandlerFunc {
 			}
 		}
 		if len(versions) > 0 {
-			response.LatestVersion = &versions[0]
+			latest := versions[0]
+			latest.Research = normalizeVersionResearch(latest.Research)
+			response.LatestVersion = &latest
 		}
 		writeJSON(w, http.StatusOK, response)
 	}
@@ -222,12 +226,186 @@ func handleDeleteTrip(deps Deps) http.HandlerFunc {
 	}
 }
 
+type replanRequest struct {
+	BaseVersion     int32                `json:"base_version"`
+	Constraints     domain.ConstraintSet `json:"constraints"`
+	ClientRequestID string               `json:"client_request_id"`
+}
+
+// handleReplan starts a fresh run with the full constraint set as a patch so
+// budget or lodging switches can change research inputs without an adjustment
+// proposal.
+func handleReplan(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req replanRequest
+		if err := decodeJSONStrict(w, r, &req); err != nil {
+			WriteError(w, r, err)
+			return
+		}
+		if req.BaseVersion <= 0 {
+			WriteError(w, r, &Error{Status: http.StatusBadRequest, Code: "invalid_base_version", Message: "缺少基础版本"})
+			return
+		}
+		if strings.TrimSpace(req.Constraints.City) == "" {
+			WriteError(w, r, &Error{Status: http.StatusBadRequest, Code: "invalid_city", Message: "缺少城市"})
+			return
+		}
+		city, err := normalizeCity(req.Constraints.City)
+		if err != nil {
+			WriteError(w, r, err)
+			return
+		}
+		if req.Constraints.Days < 1 || req.Constraints.Days > 4 {
+			WriteError(w, r, &Error{Status: http.StatusBadRequest, Code: "invalid_days", Message: "行程天数不合法"})
+			return
+		}
+		requestID := strings.TrimSpace(req.ClientRequestID)
+		if requestID == "" {
+			requestID = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+		}
+		if requestID != "" && !validRequestID(requestID) {
+			WriteError(w, r, &Error{Status: http.StatusBadRequest, Code: "invalid_request_id", Message: "幂等键不合法"})
+			return
+		}
+
+		tripID := chi.URLParam(r, "tripID")
+		trip, err := deps.Store.GetTrip(r.Context(), tripID)
+		if err != nil {
+			WriteError(w, r, mapStoreError(err))
+			return
+		}
+		base, err := deps.Store.GetPlanVersionBySeq(r.Context(), tripID, req.BaseVersion)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				WriteError(w, r, &Error{Status: http.StatusNotFound, Code: "version_not_found", Message: "基础版本不存在"})
+				return
+			}
+			WriteError(w, r, errInternal(err))
+			return
+		}
+
+		if requestID != "" {
+			if existing, err := deps.Store.GetRunByRequestID(r.Context(), requestID); err == nil {
+				if existing.TripID != tripID || existing.Mode != "replan" {
+					WriteError(w, r, &Error{Status: http.StatusConflict, Code: "request_id_conflict", Message: "幂等键已被其他请求使用"})
+					return
+				}
+				writeJSON(w, http.StatusAccepted, adjustmentResponse{RunID: existing.ID, EventsURL: eventsURL(existing.ID)})
+				return
+			}
+		}
+
+		var plan domain.Itinerary
+		if err := json.Unmarshal(base.Plan, &plan); err != nil {
+			WriteError(w, r, errInternal(err))
+			return
+		}
+		req.Constraints.City = city
+		constraintsJSON, err := json.Marshal(req.Constraints)
+		if err != nil {
+			WriteError(w, r, errInternal(err))
+			return
+		}
+
+		var idempotency *string
+		if requestID != "" {
+			idempotency = &requestID
+		}
+		baseVersionID := base.ID
+		run, err := deps.Store.CreateRun(r.Context(), repo.CreateRunParams{
+			TripID:        trip.ID,
+			Mode:          "replan",
+			Status:        agent.StatusQueued,
+			Stage:         "parse",
+			Input:         replanSummary(city, req.Constraints.Days),
+			Constraints:   constraintsJSON,
+			BaseVersionID: &baseVersionID,
+			RequestID:     idempotency,
+		})
+		if err != nil {
+			WriteError(w, r, errInternal(err))
+			return
+		}
+
+		previous := plan
+		patch := req.Constraints
+		state := agent.TripState{
+			TripID:          trip.ID,
+			RunID:           run.ID,
+			Mode:            "replan",
+			Input:           replanSummary(city, req.Constraints.Days),
+			Constraints:     req.Constraints,
+			ConstraintPatch: &patch,
+			Previous:        &previous,
+			PreviousSeq:     int(base.Seq),
+			Status:          agent.StatusQueued,
+			Stage:           "parse",
+		}
+		encoded, err := state.Encode()
+		if err != nil {
+			WriteError(w, r, errInternal(err))
+			return
+		}
+		if err := deps.Store.SaveRunState(r.Context(), repo.UpdateRunStateParams{
+			ID:     run.ID,
+			State:  encoded,
+			Stage:  "parse",
+			Round:  0,
+			Status: agent.StatusQueued,
+		}); err != nil {
+			WriteError(w, r, errInternal(err))
+			return
+		}
+
+		startCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+		defer cancel()
+		if requestID != "" {
+			err = deps.Runner.StartRequest(startCtx, run.ID, requestID)
+		} else {
+			err = deps.Runner.Start(startCtx, run.ID)
+		}
+		if err != nil && !errors.Is(err, agent.ErrInvalidRunStatus) {
+			WriteError(w, r, &Error{Status: http.StatusInternalServerError, Code: "start_failed", Message: "启动重排失败"})
+			return
+		}
+
+		writeJSON(w, http.StatusAccepted, adjustmentResponse{
+			RunID:     run.ID,
+			EventsURL: eventsURL(run.ID),
+		})
+	}
+}
+
+func replanSummary(city string, days int) string {
+	name := city
+	if city == "beijing" {
+		name = "北京"
+	}
+	return fmt.Sprintf("按最新约束重排%s %d 天行程", name, days)
+}
+
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	return decodeJSONBody(w, r, dst, false)
+}
+
+// decodeJSONStrict rejects unknown fields, which keeps replan patches from
+// silently dropping a misspelled constraint.
+func decodeJSONStrict(w http.ResponseWriter, r *http.Request, dst any) error {
+	return decodeJSONBody(w, r, dst, true)
+}
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, strict bool) error {
 	decoder := json.NewDecoder(r.Body)
+	if strict {
+		decoder.DisallowUnknownFields()
+	}
 	if err := decoder.Decode(dst); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			return &Error{Status: http.StatusRequestEntityTooLarge, Code: "payload_too_large", Message: "请求体超过大小限制"}
+		}
+		if strict {
+			return &Error{Status: http.StatusBadRequest, Code: "invalid_json", Message: "请求体包含未知字段或不是合法 JSON"}
 		}
 		return &Error{Status: http.StatusBadRequest, Code: "invalid_json", Message: "请求体不是合法 JSON"}
 	}

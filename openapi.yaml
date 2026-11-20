@@ -239,6 +239,36 @@ paths:
         "429":
           $ref: "#/components/responses/Error"
 
+  /api/trips/{tripID}/replan:
+    parameters:
+      - $ref: "#/components/parameters/TripID"
+    post:
+      operationId: replanTrip
+      summary: Re-run the pipeline with a full constraint patch from a base version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplanRequest"
+      responses:
+        "202":
+          description: Replan run accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunAccepted"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+
   /api/trips/{tripID}/share:
     parameters:
       - $ref: "#/components/parameters/TripID"
@@ -493,6 +523,26 @@ components:
           properties:
             per_hour:
               type: integer
+        plugins:
+          type: object
+          required:
+            - hotels
+            - guides
+          properties:
+            hotels:
+              $ref: "#/components/schemas/PluginStatus"
+            guides:
+              $ref: "#/components/schemas/PluginStatus"
+
+    PluginStatus:
+      type: object
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+        disabled_reason:
+          type: string
 
     CreateTripRequest:
       type: object
@@ -578,6 +628,8 @@ components:
           enum:
             - initial
             - adjustment
+            - replan
+            - eval
         status:
           type: string
           enum:
@@ -647,6 +699,165 @@ components:
         created_at:
           type: string
           format: date-time
+        research:
+          $ref: "#/components/schemas/ResearchBrief"
+
+    ResearchBrief:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - degraded
+            - skipped
+        accommodation:
+          $ref: "#/components/schemas/AccommodationBrief"
+        guides:
+          type: array
+          items:
+            $ref: "#/components/schemas/GuideSignal"
+        notes:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+        tool_calls:
+          type: integer
+        duration_ms:
+          type: integer
+
+    AccommodationBrief:
+      type: object
+      properties:
+        mentioned:
+          type: boolean
+        specified:
+          type: array
+          items:
+            type: string
+        selected:
+          $ref: "#/components/schemas/Hotel"
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/Hotel"
+        anchor_days:
+          type: array
+          items:
+            type: integer
+        nights:
+          type: integer
+        nightly_yuan:
+          type: integer
+        total_yuan:
+          type: integer
+        price_estimated:
+          type: boolean
+        include_in_budget:
+          type: boolean
+        reason:
+          type: string
+
+    Hotel:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        address:
+          type: string
+        city:
+          type: string
+        lat:
+          type: number
+        lng:
+          type: number
+        star:
+          type: integer
+        score:
+          type:
+            - number
+            - "null"
+        price_per_night_yuan:
+          type: integer
+        price_estimated:
+          type: boolean
+        booking_url:
+          type: string
+        provider:
+          type: string
+        fetched_at:
+          type: string
+          format: date-time
+
+    GuideSignal:
+      type: object
+      properties:
+        poi_id:
+          type: string
+        weight:
+          type: number
+        mentions:
+          type: integer
+        note:
+          type: string
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/GuideCitation"
+
+    GuideCitation:
+      type: object
+      properties:
+        title:
+          type: string
+        url:
+          type: string
+        site:
+          type: string
+        published_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        authority:
+          type: integer
+
+    ResearchQuestion:
+      type: object
+      required:
+        - code
+        - message
+        - options
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResearchOption"
+
+    ResearchOption:
+      type: object
+      required:
+        - id
+        - label
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        hotel:
+          $ref: "#/components/schemas/Hotel"
 
     VersionDiff:
       type: object
@@ -679,6 +890,21 @@ components:
         client_request_id:
           type: string
 
+    ReplanRequest:
+      type: object
+      required:
+        - base_version
+        - constraints
+      properties:
+        base_version:
+          type: integer
+          minimum: 1
+        constraints:
+          type: object
+          additionalProperties: true
+        client_request_id:
+          type: string
+
     RunAccepted:
       type: object
       required:
@@ -701,11 +927,24 @@ components:
             - provide_constraints
             - accept
             - reject
+            - resolve_research
         input:
           type: string
         constraints:
           type: object
           additionalProperties: true
+        research_choice:
+          $ref: "#/components/schemas/ResearchChoice"
+
+    ResearchChoice:
+      type: object
+      required:
+        - option_id
+      properties:
+        option_id:
+          type: string
+        hotel:
+          $ref: "#/components/schemas/Hotel"
 
     RunAction:
       type: object

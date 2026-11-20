@@ -4,11 +4,13 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"trippilot/internal/events"
+	"trippilot/internal/plugins"
 )
 
 const defaultMaxBodyBytes = 64 << 10
@@ -26,6 +28,7 @@ type Deps struct {
 	Store            TripStore
 	Runner           RunStarter
 	Eval             EvalService
+	PluginStatuses   []plugins.Status
 }
 
 // NewRouter builds the public API. Handlers are filled in per endpoint card;
@@ -56,6 +59,7 @@ func NewRouter(deps Deps) http.Handler {
 			public.Post("/trips", handleCreateTrip(deps))
 			public.Delete("/trips/{tripID}", handleDeleteTrip(deps))
 			public.Post("/trips/{tripID}/adjustments", handleCreateAdjustment(deps))
+			public.Post("/trips/{tripID}/replan", handleReplan(deps))
 			public.Post("/trips/{tripID}/versions/{seq}/restore", handleRestoreVersion(deps))
 			public.Post("/trips/{tripID}/share", handleCreateShare(deps))
 			public.Post("/runs/{runID}/resume", handleResumeRun(deps))
@@ -108,6 +112,10 @@ func handleReady(deps Deps) http.HandlerFunc {
 }
 
 func handleMeta(deps Deps) http.HandlerFunc {
+	type pluginMeta struct {
+		Enabled        bool   `json:"enabled"`
+		DisabledReason string `json:"disabled_reason,omitempty"`
+	}
 	type meta struct {
 		Version  string   `json:"version"`
 		Cities   []string `json:"cities"`
@@ -120,6 +128,10 @@ func handleMeta(deps Deps) http.HandlerFunc {
 		RateLimit struct {
 			PerHour int `json:"per_hour"`
 		} `json:"rate_limit"`
+		Plugins struct {
+			Hotels pluginMeta `json:"hotels"`
+			Guides pluginMeta `json:"guides"`
+		} `json:"plugins"`
 	}
 	payload := meta{Version: deps.Version, Cities: []string{"beijing"}}
 	payload.Defaults.Days = 2
@@ -127,6 +139,15 @@ func handleMeta(deps Deps) http.HandlerFunc {
 	payload.Defaults.Currency = "CNY"
 	payload.Defaults.MaxTripDays = 4
 	payload.RateLimit.PerHour = deps.RateLimitPerHour
+	for _, status := range deps.PluginStatuses {
+		item := pluginMeta{Enabled: status.Enabled, DisabledReason: status.DisabledReason}
+		switch strings.ToLower(status.Name) {
+		case "hotel", "hotels":
+			payload.Plugins.Hotels = item
+		case "guide", "guides":
+			payload.Plugins.Guides = item
+		}
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, payload)
 	}
